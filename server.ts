@@ -31,8 +31,12 @@ app.use(express.json());
 // Initialize database if not exists
 function ensureDbExists() {
   const dir = path.dirname(DB_FILE);
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
+  if (dir && dir !== "/" && dir !== "/tmp" && !fs.existsSync(dir)) {
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+    } catch (err) {
+      console.warn("Warning: Could not create DB directory, proceeding anyway:", err);
+    }
   }
   
   if (!fs.existsSync(DB_FILE)) {
