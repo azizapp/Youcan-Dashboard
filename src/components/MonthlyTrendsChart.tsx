@@ -29,10 +29,13 @@ export const MonthlyTrendsChart: React.FC<MonthlyTrendsChartProps> = ({ sales })
   let targetYear = 2026;
   let targetMonth = 5; // May
 
-  const salesWithDates = sales.filter(s => s["Order date"] && s["Order date"].match(/^\d{4}-\d{2}-\d{2}$/));
+  const salesWithDates = sales.filter(s => s["Order date"] && s["Order date"].match(/^\d{4}-\d{2}-\d{2}/));
   if (salesWithDates.length > 0) {
     // Sort and grab latest
-    const sortedDates = salesWithDates.map(s => s["Order date"]).sort();
+    const sortedDates = salesWithDates.map(s => {
+      const d = s["Order date"];
+      return d.includes("T") ? d.split("T")[0] : d.split(" ")[0];
+    }).sort();
     const latestDateStr = sortedDates[sortedDates.length - 1];
     const parts = latestDateStr.split("-");
     targetYear = parseInt(parts[0], 10);
@@ -54,7 +57,11 @@ export const MonthlyTrendsChart: React.FC<MonthlyTrendsChartProps> = ({ sales })
     const dayStr = day.toString().padStart(2, '0');
     const dateKey = `${yearStr}-${monthStr}-${dayStr}`;
 
-    const daySales = sales.filter(s => s["Order date"] === dateKey);
+    const daySales = sales.filter(s => {
+      if (!s["Order date"]) return false;
+      const cleanDate = s["Order date"].includes("T") ? s["Order date"].split("T")[0] : s["Order date"].split(" ")[0];
+      return cleanDate === dateKey;
+    });
     const deliveredSales = daySales.filter(s => s.delivery === "Delivered");
 
     const salesSum = deliveredSales.reduce((acc, s) => acc + (s["Total price"] || 0), 0);

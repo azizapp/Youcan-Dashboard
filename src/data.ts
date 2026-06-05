@@ -27,12 +27,13 @@ export const CONDITIONS = [
   { value: "Confirmed", label: "Confirmé", bg: "bg-emerald-950", text: "text-emerald-400" },
   { value: "Call again", label: "Rappeler", bg: "bg-amber-950", text: "text-amber-400" },
   { value: "WHATSAPP", label: "WhatsApp", bg: "bg-green-950", text: "text-green-400" },
-  { value: "Ne repond pas", label: "Ne répond pas", bg: "bg-red-950/40", text: "text-red-400" },
-  { value: "Anule", label: "Annulé", bg: "bg-rose-950/80", text: "text-rose-400" }
+  { value: "Ne repond pas", label: "Ne répond pas", bg: "bg-red-600", text: "text-white" },
+  { value: "Anule", label: "Annulé", bg: "bg-red-600", text: "text-white" },
+  { value: "Pas intéresse", label: "Pas intéressé", bg: "bg-red-600", text: "text-white" }
 ];
 
 export const DELIVERY_STATUSES = [
-  { value: "Delivered", label: "Livré", bg: "bg-emerald-900/40 text-emerald-400 border border-emerald-500/20" },
+  { value: "Delivered", label: "Delivered", bg: "bg-emerald-900/40 text-emerald-400 border border-emerald-500/20" },
   { value: "Retour", label: "Retour", bg: "bg-red-950/40 text-red-400 border border-red-500/10" },
   { value: "annuler", label: "Annulé", bg: "bg-amber-950/40 text-amber-400 border border-amber-500/10" },
   { value: "Client Injoignable", label: "Client Injoignable", bg: "bg-orange-950/40 text-orange-400 border border-orange-500/10" },
@@ -55,7 +56,7 @@ export function formatCurrency(amount: number): string {
 
 export function formatDateDisplay(dateStr: string): string {
   if (!dateStr) return "-";
-  return dateStr.split(" ")[0];
+  return dateStr.replace("T", " ");
 }
 
 // Phone validator: 10 digits starting with 0

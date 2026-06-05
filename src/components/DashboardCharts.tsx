@@ -20,8 +20,13 @@ export const DashboardCharts: React.FC<ChartsProps> = ({ sales, purchases, expen
   
   // Only look at Delivered sales for revenue, and calculate benefit
   sales.forEach(s => {
-    const d = s["Order date"] || "-";
+    let d = s["Order date"] || "-";
     if (d === "-") return;
+    if (d.includes("T")) {
+      d = d.split("T")[0];
+    } else if (d.includes(" ")) {
+      d = d.split(" ")[0];
+    }
     if (!dailyData[d]) dailyData[d] = { sales: 0, profit: 0 };
     
     if (s.delivery === "Delivered") {

@@ -19,10 +19,12 @@ import { PaymentsTab } from "./components/PaymentsTab";
 import { ExpensesTab } from "./components/ExpensesTab";
 import { ReportsTab } from "./components/ReportsTab";
 import { SettingsTab } from "./components/SettingsTab";
+import { SuppliersTab } from "./components/SuppliersTab";
 import { MobileView } from "./components/MobileView";
 import { SaleAddModal, PurchaseAddModal, GenericModal } from "./components/Modals";
 import { ConfirmationDialog } from "./components/ConfirmationDialog";
 import { LoginPage } from "./components/LoginPage";
+import { matchesRobustSearch } from "./lib/searchUtils";
 
 import { 
   ChevronLeft,
@@ -47,7 +49,8 @@ import {
   Truck,
   ClipboardCheck,
   FileQuestion,
-  LogOut
+  LogOut,
+  Users
 } from "lucide-react";
 
 export default function App() {
@@ -59,7 +62,7 @@ export default function App() {
   const [deviceMode, setDeviceMode] = useState<"desktop" | "mobile">("desktop");
   
   // Active page selector for DESKTOP mode
-  const [activeTab, setActiveTab] = useState<"sales" | "purchases" | "payments" | "expenses" | "reports" | "settings">("sales");
+  const [activeTab, setActiveTab] = useState<"sales" | "purchases" | "payments" | "expenses" | "reports" | "settings" | "suppliers">("sales");
 
   // Sidebar collapsed state
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(true);
@@ -77,6 +80,19 @@ export default function App() {
 
   const [isLoading, setIsLoading] = useState(false);
   const [toastMessage, setToastMessage] = useState<{ text: string; type: "success" | "error" | "info" } | null>(null);
+
+  // Background sync tracking state
+  const [backgroundSync, setBackgroundSync] = useState<{
+    status: "idle" | "syncing" | "error" | "pending";
+    lastSyncTime: string;
+    lastError: string | null;
+    queueSize: number;
+  }>({
+    status: "idle",
+    lastSyncTime: "",
+    lastError: null,
+    queueSize: 0
+  });
 
   // Modal control states
   const [isAddSaleOpen, setIsAddSaleOpen] = useState(false);
@@ -113,33 +129,9 @@ export default function App() {
     }, 4000);
   };
 
-  // Sync Database from API proxy endpoints
-  const syncDatabase = async () => {
-    setIsLoading(true);
+  // Load data only from local database.json (instant load)
+  const loadLocalDatabaseOnly = async () => {
     try {
-      // 1. Try to automated sync-pull from Google Sheets first to retrieve any external edits or new entries
-      const token = sessionStorage.getItem("google_sheets_oauth_token");
-      const pullHeaders: Record<string, string> = {};
-      if (token) {
-        pullHeaders["Authorization"] = `Bearer ${token}`;
-      }
-      
-      let pulledSuccessfully = false;
-      try {
-        const pullRes = await fetch("/api/google-sheets/sync-pull", {
-          method: "POST",
-          headers: pullHeaders
-        });
-        const pullData = await pullRes.json();
-        if (pullData.success) {
-          console.log("Successfully auto-pulled live Google Sheets updates on load");
-          pulledSuccessfully = true;
-        }
-      } catch (pullErr) {
-        console.warn("Auto-pull live updates skipped or unconfigured:", pullErr);
-      }
-
-      // 2. Load the synchronized data from the local database
       const [salesRes, purchasesRes, paymentsRes, expensesRes] = await Promise.all([
         fetchSheetData("Youcan-Orders"),
         fetchSheetData("Achat"),
@@ -163,24 +155,86 @@ export default function App() {
           payments: paymentsRes.rows || [],
           expenses: expensesRes.rows || []
         });
-        
-        if (pulledSuccessfully) {
-          showToast("تم تحديث ومزامنة البيانات مع Google Sheets بنجاح!", "success");
-        } else {
-          showToast("تم تحميل البيانات من قاعدة البيانات المحلية بنجاح.", "info");
-        }
-      } else {
-        showToast("حدث خطأ جزئى أثناء مزامنة البيانات من السيرفر.", "error");
+        return true;
       }
+    } catch (e) {
+      console.error("Failed loading local database copy:", e);
+    }
+    return false;
+  };
+
+  // Trigger non-blocking pull of live data in background
+  const triggerRemotePull = async () => {
+    try {
+      const token = sessionStorage.getItem("google_sheets_oauth_token");
+      const pullHeaders: Record<string, string> = {};
+      if (token) {
+        pullHeaders["Authorization"] = `Bearer ${token}`;
+      }
+      await fetch("/api/google-sheets/sync-pull", {
+        method: "POST",
+        headers: pullHeaders
+      });
+    } catch (e) {
+      console.warn("Background pull request failed", e);
+    }
+  };
+
+  const syncDatabase = async () => {
+    setIsLoading(true);
+    try {
+      await loadLocalDatabaseOnly();
+      await triggerRemotePull();
     } catch (err: any) {
-      showToast(`فشل المزامنة: ${err.toString()}`, "error");
+      console.error(err);
     } finally {
       setIsLoading(false);
     }
   };
 
+  // 1. Initial Load of Local Data
   useEffect(() => {
-    syncDatabase();
+    setIsLoading(true);
+    loadLocalDatabaseOnly().finally(() => {
+      setIsLoading(false);
+      triggerRemotePull();
+    });
+  }, []);
+
+  // 2. Poll background sync status periodically to catch completed tasks
+  useEffect(() => {
+    const pollStatus = async () => {
+      try {
+        const res = await fetch("/api/background-sync/status");
+        const sData = await res.json();
+        if (sData.success) {
+          setBackgroundSync(prev => {
+            const wasSyncing = prev.status === "syncing" || prev.status === "pending";
+            const isNowIdle = sData.status === "idle";
+            
+            // If we just finished a background sync, reload database content smoothly!
+            if (wasSyncing && isNowIdle) {
+              loadLocalDatabaseOnly().catch(() => {});
+              // Only show toast if user hasn't interacted recently (avoid disruption)
+            }
+            
+            return {
+              status: sData.status,
+              lastSyncTime: sData.lastSyncTime,
+              lastError: sData.lastError,
+              queueSize: sData.queueSize
+            };
+          });
+        }
+      } catch (e) {
+        console.warn("Error polling background sync:", e);
+      }
+    };
+
+    pollStatus();
+    // Poll every 30 seconds instead of 4 to avoid UI disruption
+    const interval = setInterval(pollStatus, 30000);
+    return () => clearInterval(interval);
   }, []);
 
   // Dynamics dropdown choices compiled from actual sheet data columns (with defaults)
@@ -372,16 +426,93 @@ export default function App() {
     }
   };
 
-  // 1. Calculate General High Performance Metrics for Desktop HUD Dashboard
+  // Lifted Filter States for custom filters
+  const [searchQuery, setSearchQuery] = useState("");
+  const [selectedCondition, setSelectedCondition] = useState("");
+  const [selectedCity, setSelectedCity] = useState("");
+  const [selectedLivreur, setSelectedLivreur] = useState("");
+  const [selectedDateRange, setSelectedDateRange] = useState("month");
+
+  // Custom filter check for date ranges
+  const isDateInSelectedRange = (dateStr: string, range: string): boolean => {
+    if (!dateStr) return false;
+    const now = new Date();
+    const cleanDateStr = dateStr.includes("T") ? dateStr.split("T")[0] : dateStr.split(" ")[0]; // yyyy-mm-dd
+    const orderDate = new Date(cleanDateStr);
+    
+    // Set time limits to start of days
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const yesterdayStart = new Date(todayStart);
+    yesterdayStart.setDate(yesterdayStart.getDate() - 1);
+    
+    const oneWeekAgo = new Date(todayStart);
+    oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
+
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    const startOfYear = new Date(now.getFullYear(), 0, 1);
+
+    switch (range) {
+      case "today":
+        return orderDate >= todayStart;
+      case "yesterday":
+        return orderDate >= yesterdayStart && orderDate < todayStart;
+      case "week":
+        return orderDate >= oneWeekAgo;
+      case "month":
+        return orderDate >= startOfMonth;
+      case "year":
+        return orderDate >= startOfYear;
+      case "all":
+      default:
+        return true;
+    }
+  };
+
+  const filteredSales = React.useMemo(() => {
+    return data.sales.filter(sale => {
+      // Sidebar Preset Filter
+      if (salesPreset === "delivery_requests") {
+        const isLivreurEmpty = !sale.Livreur || sale.Livreur.trim() === "";
+        const isDeliveryEmpty = !sale.delivery || sale.delivery.trim() === "";
+        if (sale.Condition !== "Confirmed" || !isLivreurEmpty || !isDeliveryEmpty) {
+          return false;
+        }
+      } else if (salesPreset === "delivery_status") {
+        const isLivreurFilled = !!sale.Livreur && sale.Livreur.trim() !== "";
+        const isDeliveryEmpty = !sale.delivery || sale.delivery.trim() === "";
+        if (sale.Condition !== "Confirmed" || !isLivreurFilled || !isDeliveryEmpty) {
+          return false;
+        }
+      } else if (salesPreset === "no_status") {
+        const isConditionEmpty = !sale.Condition || sale.Condition.trim() === "";
+        const isLivreurEmpty = !sale.Livreur || sale.Livreur.trim() === "";
+        const isDeliveryEmpty = !sale.delivery || sale.delivery.trim() === "";
+        if (!isConditionEmpty || !isLivreurEmpty || !isDeliveryEmpty) {
+          return false;
+        }
+      }
+
+      // Search Query (id, name, phone)
+      const matchesSearch = matchesRobustSearch(sale, searchQuery);
+
+      const matchesCondition = !selectedCondition ? true : sale.Condition === selectedCondition;
+      const matchesCity = !selectedCity ? true : sale.City === selectedCity;
+      const matchesLivreur = !selectedLivreur ? true : sale.Livreur === selectedLivreur;
+      const matchesDate = isDateInSelectedRange(sale["Order date"], selectedDateRange);
+
+      return matchesSearch && matchesCondition && matchesCity && matchesLivreur && matchesDate;
+    });
+  }, [data.sales, salesPreset, searchQuery, selectedCondition, selectedCity, selectedLivreur, selectedDateRange]);
+
+  // 1. Calculate General High Performance Metrics for Desktop HUD Dashboard based on filteredSales
   const statsOverview = React.useMemo(() => {
-    const totalSales = data.sales.length;
+    const totalSales = filteredSales.length;
     
     // Delivered metrics count and sum
-    const deliveredSalesList = data.sales.filter(s => s.delivery === "Delivered");
+    const deliveredSalesList = filteredSales.filter(s => s.delivery === "Delivered");
     const deliveredCount = deliveredSalesList.length;
 
     // Delivery rate success percentage
-    const deliveryRate = totalSales > 0 ? (deliveredCount / totalSales) * 105 : 0; // scaled nicely or mathematically calculated
     const deliveryRateExact = totalSales > 0 ? (deliveredCount / totalSales) * 100 : 0;
 
     // Delivered Revenue Sum
@@ -396,7 +527,7 @@ export default function App() {
     // Dynamic Net profit = Benefit - Expenses (Section 4.2)
     const trueNetProjectProfit = netProfitSum - totalExpenses;
 
-    const tourDeliveryInRoute = data.sales.filter(s => s.Condition === "Confirmed" && !s.delivery).length;
+    const tourDeliveryInRoute = filteredSales.filter(s => s.Condition === "Confirmed" && !s.delivery).length;
 
     // Average Order Value (AOV) based on delivered orders
     const averageOrderValue = deliveredCount > 0 ? totalRevenueSum / deliveredCount : 0;
@@ -410,7 +541,7 @@ export default function App() {
       tourDeliveryInRoute,
       averageOrderValue
     };
-  }, [data]);
+  }, [filteredSales, data.expenses]);
 
   if (!isAuthenticated) {
     return (
@@ -461,6 +592,38 @@ export default function App() {
         </div>
 
         <div className="flex items-center gap-2">
+          {/* Background Sync Status Indicator */}
+          <div className="flex items-center gap-2 px-3 py-1 rounded-lg bg-white/5 border border-white/5 text-[11px] font-sans">
+            {backgroundSync.status === "syncing" && (
+              <span className="flex items-center gap-1.5 text-yellow-400">
+                <span className="w-1.5 h-1.5 rounded-full bg-yellow-400 animate-pulse" />
+                <RefreshCw className="w-2.5 h-2.5 animate-spin" />
+                <span className="font-semibold text-gray-300">جاري المزامنة في الخلفية...</span>
+              </span>
+            )}
+            {backgroundSync.status === "pending" && (
+              <span className="flex items-center gap-1.5 text-blue-400">
+                <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />
+                <span className="font-semibold text-gray-300">مجدول للمزامنة...</span>
+              </span>
+            )}
+            {backgroundSync.status === "error" && (
+              <span className="flex items-center gap-1.5 text-rose-400" title={backgroundSync.lastError || ""}>
+                <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />
+                <span className="font-semibold text-rose-300 flex items-center gap-1">
+                  <span>فشل المزامنة</span>
+                  <span className="text-[9px] bg-rose-500/10 px-1 rounded text-rose-400 hover:bg-rose-500/20 cursor-help" title={backgroundSync.lastError || ""}>التفاصيل</span>
+                </span>
+              </span>
+            )}
+            {backgroundSync.status === "idle" && (
+              <span className="flex items-center gap-1.5 text-emerald-400">
+                <span className="w-1 h-1 rounded-full bg-emerald-400" />
+                <span className="font-medium text-gray-400">مزامنة السحابة مفعلة تلقائياً</span>
+              </span>
+            )}
+          </div>
+
           <button 
             onClick={syncDatabase} 
             disabled={isLoading}
@@ -541,7 +704,7 @@ export default function App() {
                     setActiveTab("sales");
                     setSalesPreset("all");
                   }}
-                  title="المبيعات (Youcan Orders)"
+                  title="جميع الطلبيات (المبيعات)"
                   className={`w-full flex items-center ${isSidebarCollapsed ? "justify-center px-0" : "justify-start gap-3"} p-3 text-xs font-bold font-sans rounded-xl border transition-all ${
                     activeTab === "sales" && salesPreset === "all"
                       ? "bg-blue-600/10 text-blue-400 border-blue-500/15"
@@ -549,62 +712,56 @@ export default function App() {
                   }`}
                 >
                   <LayoutGrid className="w-5 h-5 shrink-0" />
-                  {!isSidebarCollapsed && <span className="truncate">المبيعات (Youcan Orders)</span>}
+                  {!isSidebarCollapsed && <span className="truncate">جميع الطلبيات (المبيعات)</span>}
                 </button>
 
-                {/* Quick Preset Buttons (Filters) */}
-                <div className="space-y-1 my-1.5 pr-2 border-r border-white/5">
-                  {/* Button 1: طلبات التوصيل */}
-                  <button
-                    onClick={() => {
-                      setActiveTab("sales");
-                      setSalesPreset("delivery_requests");
-                    }}
-                    title="طلبات التوصيل"
-                    className={`w-full flex items-center ${isSidebarCollapsed ? "justify-center px-0" : "justify-start gap-3"} py-2 px-2.5 text-[11px] font-bold font-sans rounded-lg border transition-all ${
-                      activeTab === "sales" && salesPreset === "delivery_requests"
-                        ? "bg-amber-500/10 text-amber-400 border-amber-500/25"
-                        : "text-gray-400 border-transparent hover:bg-white/5"
-                    }`}
-                  >
-                    <Truck className="w-4 h-4 shrink-0 text-amber-500" />
-                    {!isSidebarCollapsed && <span className="truncate">طلبات التوصيل</span>}
-                  </button>
+                <button
+                  onClick={() => {
+                    setActiveTab("sales");
+                    setSalesPreset("delivery_requests");
+                  }}
+                  title="طلبات التوصيل"
+                  className={`w-full flex items-center ${isSidebarCollapsed ? "justify-center px-0" : "justify-start gap-3"} p-3 text-xs font-bold font-sans rounded-xl border transition-all ${
+                    activeTab === "sales" && salesPreset === "delivery_requests"
+                      ? "bg-blue-600/10 text-blue-400 border-blue-500/15"
+                      : "text-gray-400 border-transparent hover:bg-white/5"
+                  }`}
+                >
+                  <Truck className="w-5 h-5 shrink-0 text-amber-400" />
+                  {!isSidebarCollapsed && <span className="truncate">طلبات التوصيل</span>}
+                </button>
 
-                  {/* Button 2: حاله التسليم */}
-                  <button
-                    onClick={() => {
-                      setActiveTab("sales");
-                      setSalesPreset("delivery_status");
-                    }}
-                    title="حاله التسليم"
-                    className={`w-full flex items-center ${isSidebarCollapsed ? "justify-center px-0" : "justify-start gap-3"} py-2 px-2.5 text-[11px] font-bold font-sans rounded-lg border transition-all ${
-                      activeTab === "sales" && salesPreset === "delivery_status"
-                        ? "bg-blue-500/10 text-blue-400 border-blue-500/25"
-                        : "text-gray-400 border-transparent hover:bg-white/5"
-                    }`}
-                  >
-                    <ClipboardCheck className="w-4 h-4 shrink-0 text-blue-400" />
-                    {!isSidebarCollapsed && <span className="truncate">حاله التسليم</span>}
-                  </button>
+                <button
+                  onClick={() => {
+                    setActiveTab("sales");
+                    setSalesPreset("delivery_status");
+                  }}
+                  title="حالة التسليم"
+                  className={`w-full flex items-center ${isSidebarCollapsed ? "justify-center px-0" : "justify-start gap-3"} p-3 text-xs font-bold font-sans rounded-xl border transition-all ${
+                    activeTab === "sales" && salesPreset === "delivery_status"
+                      ? "bg-blue-600/10 text-blue-400 border-blue-500/15"
+                      : "text-gray-400 border-transparent hover:bg-white/5"
+                  }`}
+                >
+                  <ClipboardCheck className="w-5 h-5 shrink-0 text-emerald-400" />
+                  {!isSidebarCollapsed && <span className="truncate">حالة التسليم</span>}
+                </button>
 
-                  {/* Button 3: بدون حاله */}
-                  <button
-                    onClick={() => {
-                      setActiveTab("sales");
-                      setSalesPreset("no_status");
-                    }}
-                    title="بدون حاله"
-                    className={`w-full flex items-center ${isSidebarCollapsed ? "justify-center px-0" : "justify-start gap-3"} py-2 px-2.5 text-[11px] font-bold font-sans rounded-lg border transition-all ${
-                      activeTab === "sales" && salesPreset === "no_status"
-                        ? "bg-purple-500/10 text-purple-400 border-purple-500/25"
-                        : "text-gray-400 border-transparent hover:bg-white/5"
-                    }`}
-                  >
-                    <FileQuestion className="w-4 h-4 shrink-0 text-purple-400" />
-                    {!isSidebarCollapsed && <span className="truncate">بدون حاله</span>}
-                  </button>
-                </div>
+                <button
+                  onClick={() => {
+                    setActiveTab("sales");
+                    setSalesPreset("no_status");
+                  }}
+                  title="بدون حالة"
+                  className={`w-full flex items-center ${isSidebarCollapsed ? "justify-center px-0" : "justify-start gap-3"} p-3 text-xs font-bold font-sans rounded-xl border transition-all ${
+                    activeTab === "sales" && salesPreset === "no_status"
+                      ? "bg-blue-600/10 text-blue-400 border-blue-500/15"
+                      : "text-gray-400 border-transparent hover:bg-white/5"
+                  }`}
+                >
+                  <FileQuestion className="w-5 h-5 shrink-0 text-rose-400" />
+                  {!isSidebarCollapsed && <span className="truncate">بدون حالة</span>}
+                </button>
 
                 <button
                   onClick={() => setActiveTab("purchases")}
@@ -630,6 +787,19 @@ export default function App() {
                 >
                   <CreditCard className="w-5 h-5 shrink-0" />
                   {!isSidebarCollapsed && <span className="truncate">الدفعات وتصفية الموردين</span>}
+                </button>
+
+                <button
+                  onClick={() => setActiveTab("suppliers")}
+                  title="حسابات الموردين التفصيلية"
+                  className={`w-full flex items-center ${isSidebarCollapsed ? "justify-center px-0" : "justify-start gap-3"} p-3 text-xs font-bold font-sans rounded-xl border transition-all ${
+                    activeTab === "suppliers"
+                      ? "bg-blue-600/10 text-blue-400 border-blue-500/15"
+                      : "text-gray-400 border-transparent hover:bg-white/5"
+                  }`}
+                >
+                  <Users className="w-5 h-5 shrink-0" />
+                  {!isSidebarCollapsed && <span className="truncate">حسابات الموردين التفصيلية</span>}
                 </button>
 
                 <button
@@ -773,6 +943,17 @@ export default function App() {
                   onUpdateOrder={handleInlineStatusUpdate}
                   salesPreset={salesPreset}
                   setSalesPreset={setSalesPreset}
+                  searchQuery={searchQuery}
+                  setSearchQuery={setSearchQuery}
+                  selectedCondition={selectedCondition}
+                  setSelectedCondition={setSelectedCondition}
+                  selectedCity={selectedCity}
+                  setSelectedCity={setSelectedCity}
+                  selectedLivreur={selectedLivreur}
+                  setSelectedLivreur={setSelectedLivreur}
+                  selectedDateRange={selectedDateRange}
+                  setSelectedDateRange={setSelectedDateRange}
+                  filteredSales={filteredSales}
                 />
               )}
 
@@ -792,6 +973,16 @@ export default function App() {
                   purchases={data.purchases}
                   onAddPayment={() => setIsAddPaymentOpen(true)}
                   onEditPayment={(pay) => setEditingPayment(pay)}
+                />
+              )}
+
+              {activeTab === "suppliers" && (
+                <SuppliersTab 
+                  sales={data.sales}
+                  purchases={data.purchases}
+                  payments={data.payments}
+                  onAddPayment={() => setIsAddPaymentOpen(true)}
+                  onRefresh={syncDatabase}
                 />
               )}
 
@@ -871,7 +1062,7 @@ export default function App() {
             { key: "Full name", label: "اسم العميل بالكامل", type: "text", required: true },
             { key: "Phone", label: "رقم الهاتف", type: "text", required: true },
             { key: "City", label: "المدينة", type: "select", options: cityOptions, required: true },
-            { key: "Region", label: "الجهة / المقاطعة للتوصيل", type: "text" },
+            { key: "Region", label: "العنوان", type: "text" },
             { key: "Product name", label: "كود المنتج (Code)", type: "select", options: productOptions, required: true },
             { key: "Product URL", label: "رابط صفحة السلعة بالمتجر (Product URL)", type: "url" },
             { key: "Variant price", label: "سعر البيع المعتمد بالدرهم", type: "number", required: true },

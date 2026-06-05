@@ -3,6 +3,16 @@ import { Order, Purchase, Payment, Expense } from "../types";
 import { MOROCCAN_CITIES, CONDITIONS, DELIVERY_STATUSES, LIVREURS, getCalculatedFields, validatePhone, generateWhatsAppUrl } from "../data";
 import { X, Save, Plus, Trash2 } from "lucide-react";
 
+const getLocalDatetimeString = () => {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  const hours = String(now.getHours()).padStart(2, "0");
+  const minutes = String(now.getMinutes()).padStart(2, "0");
+  return `${year}-${month}-${day}T${hours}:${minutes}`;
+};
+
 interface SaleAddModalProps {
   onClose: () => void;
   onSave: (values: any) => void;
@@ -16,7 +26,7 @@ interface SaleAddModalProps {
 export const SaleAddModal: React.FC<SaleAddModalProps> = ({ onClose, onSave, purchases, nextOrderId, cityOptions, livreurOptions, productOptions }) => {
   const [formData, setFormData] = useState({
     "Order ID": nextOrderId,
-    "Order date": new Date().toISOString().split("T")[0],
+    "Order date": getLocalDatetimeString(),
     "Full name": "",
     "Phone": "",
     "City": "",
@@ -24,7 +34,7 @@ export const SaleAddModal: React.FC<SaleAddModalProps> = ({ onClose, onSave, pur
     "Product name": "", // Stores product CODE
     "Product URL": "",
     "Variant price": "" as any,
-    "Total quantity": "" as any,
+    "Total quantity": 1,
     "Condition": "",
     "delivery": "",
     "Livreur": "",
@@ -55,9 +65,18 @@ export const SaleAddModal: React.FC<SaleAddModalProps> = ({ onClose, onSave, pur
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!validatePhone(formData.Phone)) {
-      setPhoneError("رقم الهاتف يجب أن يتكون من 10 أرقام ويبدأ بـ 0 (مثال: 0661234567)");
-      return;
+    const cleanPhone = formData.Phone.trim().replace(/\s+/g, "");
+    
+    if (cleanPhone.startsWith("0")) {
+      if (cleanPhone.length !== 10 || !/^\d+$/.test(cleanPhone)) {
+        setPhoneError("رقم الهاتف الذي يبدأ بـ 0 يجب أن يتكون من 10 أرقام بالضبط (مثال: 0661234567)");
+        return;
+      }
+    } else {
+      if (cleanPhone.length !== 9 || !/^\d+$/.test(cleanPhone)) {
+        setPhoneError("رقم الهاتف بدون 0 يجب أن يتكون من 9 أرقام بالضبط (مثال: 661234567)");
+        return;
+      }
     }
     setPhoneError("");
 
@@ -73,23 +92,46 @@ export const SaleAddModal: React.FC<SaleAddModalProps> = ({ onClose, onSave, pur
       purchases
     );
 
-    const whatsappUrl = generateWhatsAppUrl(formData.Phone);
+    let whatsappValue = "";
+    if (cleanPhone.startsWith("0")) {
+      whatsappValue = "212" + cleanPhone.slice(1);
+    } else {
+      whatsappValue = "212" + cleanPhone;
+    }
 
     onSave({
       ...formData,
+      Phone: cleanPhone, // Save clean normalized phone
       ...calcs,
       "Variant price": variantPriceParsed,
       "Total quantity": totalQuantityParsed,
       "Total price": formData.delivery === "Delivered" ? variantPriceParsed * totalQuantityParsed : 0,
-      "WHATSAPP": whatsappUrl
+      "WHATSAPP": whatsappValue
+    });
+
+    // Reset formData immediately to prevent resubmit or duplicates
+    setFormData({
+      "Order ID": nextOrderId,
+      "Order date": getLocalDatetimeString(),
+      "Full name": "",
+      "Phone": "",
+      "City": "",
+      "Region": "",
+      "Product name": "",
+      "Product URL": "",
+      "Variant price": "" as any,
+      "Total quantity": 1,
+      "Condition": "",
+      "delivery": "",
+      "Livreur": "",
     });
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
-      <div className="bg-[#111930] border border-white/10 rounded-2xl w-full max-w-lg shadow-2xl flex flex-col max-h-[85vh] overflow-hidden text-right" dir="rtl">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 overflow-y-auto">
+      <div className="bg-[#111930] border border-white/10 rounded-2xl w-full lg:max-w-6xl md:max-w-3xl shadow-2xl flex flex-col max-h-[90vh] overflow-hidden text-right" dir="rtl">
         {/* Header */}
-        <div className="px-6 py-4 border-b border-white/5 flex items-center justify-between">
+        <div className="px-6 py-4 border-b border-white/5 flex items-center justify-between bg-[#0d1426]">
           <h3 className="text-lg font-bold text-white flex items-center gap-2">
             <Plus className="w-5 h-5 text-blue-500" />
             إضافة طلب جديد
@@ -100,116 +142,61 @@ export const SaleAddModal: React.FC<SaleAddModalProps> = ({ onClose, onSave, pur
         </div>
 
         {/* Content Form */}
-        <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto p-6 space-y-4">
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-xs font-medium text-gray-300 mb-1">رقم الطلب (تلقائي)</label>
-              <input
-                type="text"
-                value={formData["Order ID"]}
-                disabled
-                className="w-full bg-[#0d1426] border border-white/10 rounded-xl px-3 py-2 text-sm text-gray-400 font-mono"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-gray-300 mb-1">تاريخ الطلب</label>
-              <input
-                type="date"
-                required
-                value={formData["Order date"]}
-                onChange={e => setFormData({ ...formData, "Order date": e.target.value })}
-                className="w-full bg-[#0d1426] border border-white/10 rounded-xl px-3 py-2 text-sm text-white font-mono focus:border-blue-500/50"
-              />
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-xs font-medium text-gray-300 mb-1">اسم العميل بالكامل</label>
-              <input
-                type="text"
-                required
-                placeholder="مثال: أحمد العلمي"
-                value={formData["Full name"]}
-                onChange={e => setFormData({ ...formData, "Full name": e.target.value })}
-                className="w-full bg-[#0d1426] border border-white/10 rounded-xl px-3 py-2 text-sm text-white focus:border-blue-500/50"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-gray-300 mb-1">رقم الهاتف (10 أرقام)</label>
-              <input
-                type="text"
-                required
-                placeholder="مثال: 0661234567"
-                maxLength={10}
-                value={formData.Phone}
-                onChange={e => setFormData({ ...formData, "Phone": e.target.value })}
-                className="w-full bg-[#0d1426] border border-white/10 rounded-xl px-3 py-2 text-sm text-white font-mono focus:border-blue-500/50 text-left"
-                dir="ltr"
-              />
-              {phoneError && <p className="text-red-400 text-[10px] mt-1">{phoneError}</p>}
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-xs font-medium text-gray-300 mb-1 font-sans">المدينة (Ville)</label>
-              {!showNewCity ? (
-                <select
-                  value={formData.City}
-                  onChange={e => {
-                    if (e.target.value === "__NEW__") {
-                      setShowNewCity(true);
-                      setFormData({ ...formData, City: "", Region: "" });
-                    } else {
-                      setFormData({ ...formData, City: e.target.value, Region: e.target.value });
-                    }
-                  }}
-                  className="w-full bg-[#0d1426] border border-[#2d3a54] text-white rounded-xl px-3 py-2 text-sm focus:border-blue-500/50"
-                >
-                  <option value="" className="bg-[#0f172a] text-gray-500"> </option>
-                  {cityOptions.map(c => (
-                    <option key={c} value={c} className="bg-[#0f172a]">{c}</option>
-                  ))}
-                  <option value="__NEW__" className="text-blue-400 font-bold">➕ Ajouter nouvelle ville...</option>
-                </select>
-              ) : (
-                <div className="space-y-1.5 text-right">
-                  <input
-                    type="text"
-                    placeholder="Nom de la ville..."
-                    value={formData.City}
-                    onChange={e => setFormData({ ...formData, City: e.target.value, Region: e.target.value })}
-                    className="w-full bg-[#0d1426] border border-blue-500/50 text-white rounded-xl px-3 py-2 text-sm"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setShowNewCity(false);
-                      setFormData({ ...formData, City: "", Region: "" });
-                    }}
-                    className="text-xs text-blue-400 hover:underline inline-block"
-                  >
-                    Retour à la sélection / الرجوع للقائمة
-                  </button>
-                </div>
-              )}
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-gray-300 mb-1">المنطقة (Région)</label>
-              <input
-                type="text"
-                value={formData.Region}
-                onChange={e => setFormData({ ...formData, Region: e.target.value })}
-                className="w-full bg-[#0d1426] border border-[#2d3a54] text-white rounded-xl px-3 py-2 text-sm focus:border-blue-500/50"
-              />
-            </div>
-          </div>
-
-          <div className="p-4 bg-white/5 rounded-xl border border-white/5 space-y-3">
-            <h4 className="text-xs font-bold text-gray-400">بيانات المنتج والتسعير</h4>
+        <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto p-6 space-y-6">
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
             
-            <div className="grid grid-cols-2 gap-4">
+            {/* Box 1: Customer Contact Information */}
+            <div className="bg-[#0d1426]/40 border border-white/5 p-5 rounded-2xl space-y-4">
+              <div className="border-b border-white/5 pb-2 mb-2 flex items-center gap-2">
+                <div className="w-1.5 h-1.5 bg-blue-500 rounded-full"></div>
+                <span className="text-xs font-bold text-gray-400">بيانات العميل والاتصال</span>
+              </div>
+              
+              <div>
+                <label className="block text-xs font-medium text-gray-300 mb-1">رقم الطلب (تلقائي)</label>
+                <input
+                  type="text"
+                  value={formData["Order ID"]}
+                  disabled
+                  className="w-full bg-[#0d1426] border border-white/10 rounded-xl px-3 py-2 text-sm text-gray-400 font-mono"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-gray-300 mb-1">اسم العميل بالكامل</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="مثال: أحمد العلمي"
+                  value={formData["Full name"]}
+                  onChange={e => setFormData({ ...formData, "Full name": e.target.value })}
+                  className="w-full bg-[#0d1426] border border-white/10 rounded-xl px-3 py-2 text-sm text-white focus:border-blue-500/50"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-gray-300 mb-1">رقم الهاتف (10 أرقام)</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="مثال: 0661234567"
+                  maxLength={10}
+                  value={formData.Phone}
+                  onChange={e => setFormData({ ...formData, "Phone": e.target.value })}
+                  className="w-full bg-[#0d1426] border border-white/10 rounded-xl px-3 py-2 text-sm text-white font-mono focus:border-blue-500/50 text-left"
+                  dir="ltr"
+                />
+                {phoneError && <p className="text-red-400 text-[10px] mt-1">{phoneError}</p>}
+              </div>
+            </div>
+
+            {/* Box 2: Product & Pricing Information */}
+            <div className="bg-[#0d1426]/40 border border-white/5 p-5 rounded-2xl space-y-4">
+              <div className="border-b border-white/5 pb-2 mb-2 flex items-center gap-2">
+                <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full"></div>
+                <span className="text-xs font-bold text-gray-400">تفاصيل السلعة والتسعير</span>
+              </div>
+
               <div>
                 <label className="block text-xs font-medium text-gray-300 mb-1">رمز المنتج (Code de produit)</label>
                 {!showNewProduct ? (
@@ -254,6 +241,7 @@ export const SaleAddModal: React.FC<SaleAddModalProps> = ({ onClose, onSave, pur
                   </div>
                 )}
               </div>
+
               <div>
                 <label className="block text-xs font-medium text-gray-300 mb-1">سعر البيع المقترح (Variant Price)</label>
                 <input
@@ -265,9 +253,7 @@ export const SaleAddModal: React.FC<SaleAddModalProps> = ({ onClose, onSave, pur
                   className="w-full bg-[#0d1426] border border-white/10 rounded-xl px-3 py-2 text-sm text-white font-mono"
                 />
               </div>
-            </div>
 
-            <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="block text-xs font-medium text-gray-300 mb-1">الكمية المطلوبة</label>
                 <input
@@ -279,6 +265,7 @@ export const SaleAddModal: React.FC<SaleAddModalProps> = ({ onClose, onSave, pur
                   className="w-full bg-[#0d1426] border border-white/10 rounded-xl px-3 py-2 text-sm text-white font-mono"
                 />
               </div>
+
               <div>
                 <label className="block text-xs font-medium text-gray-300 mb-1">رابط المنتج (URL)</label>
                 <input
@@ -291,110 +278,231 @@ export const SaleAddModal: React.FC<SaleAddModalProps> = ({ onClose, onSave, pur
                 />
               </div>
             </div>
-          </div>
 
-          <div className="grid grid-cols-3 gap-3">
-            <div>
-              <label className="block text-xs font-medium text-gray-300 mb-1">الحالة (Condition)</label>
-              {!showNewCondition ? (
-                <select
-                  value={formData.Condition}
-                  onChange={e => {
-                    if (e.target.value === "__NEW__") {
-                      setShowNewCondition(true);
-                      setFormData({ ...formData, Condition: "" });
-                    } else {
-                      setFormData({ ...formData, Condition: e.target.value });
-                    }
-                  }}
-                  className="w-full bg-[#0d1426] border border-white/10 text-white rounded-xl px-3 py-2 text-xs focus:border-blue-500/50"
-                >
-                  <option value="" className="bg-[#0f172a] text-gray-500"> </option>
-                  {CONDITIONS.map(c => (
-                    <option key={c.value} value={c.value} className="bg-[#0f172a]">{c.label}</option>
-                  ))}
-                  <option value="__NEW__" className="text-blue-400 font-bold">➕ Ajouter nouveau...</option>
-                </select>
-              ) : (
-                <div className="space-y-1.5 text-right">
-                  <input
-                    type="text"
-                    placeholder="Condition..."
+            {/* Box 3: Shipment, Locations, Datetimes */}
+            <div className="bg-[#0d1426]/40 border border-white/5 p-5 rounded-2xl space-y-4">
+              <div className="border-b border-white/5 pb-2 mb-2 flex items-center gap-2">
+                <div className="w-1.5 h-1.5 bg-amber-500 rounded-full"></div>
+                <span className="text-xs font-bold text-gray-400">التاريخ والشحن واللوجستيك</span>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-gray-300 mb-1">تاريخ ووقت الطلب</label>
+                <input
+                  type="datetime-local"
+                  required
+                  value={formData["Order date"]}
+                  onChange={e => setFormData({ ...formData, "Order date": e.target.value })}
+                  className="w-full bg-[#0d1426] border border-white/10 rounded-xl px-3 py-2 text-sm text-white font-mono focus:border-blue-500/50"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-gray-300 mb-1 font-sans">المدينة (Ville)</label>
+                {!showNewCity ? (
+                  <select
+                    value={formData.City}
+                    onChange={e => {
+                      if (e.target.value === "__NEW__") {
+                        setShowNewCity(true);
+                        setFormData({ ...formData, City: "" });
+                      } else {
+                        setFormData({ ...formData, City: e.target.value });
+                      }
+                    }}
+                    className="w-full bg-[#0d1426] border border-[#2d3a54] text-white rounded-xl px-3 py-2 text-sm focus:border-blue-500/50"
+                  >
+                    <option value="" className="bg-[#0f172a] text-gray-500">اختر المدينة...</option>
+                    {cityOptions.map(c => (
+                      <option key={c} value={c} className="bg-[#0f172a]">{c}</option>
+                    ))}
+                    <option value="__NEW__" className="text-blue-400 font-bold">➕ إضافة مدينة جديدة...</option>
+                  </select>
+                ) : (
+                  <div className="space-y-1.5 text-right">
+                    <input
+                      type="text"
+                      required
+                      placeholder="اكتب اسم المدينة الجديدة..."
+                      value={formData.City}
+                      onChange={e => setFormData({ ...formData, City: e.target.value })}
+                      className="w-full bg-[#0d1426] border border-blue-500/50 text-white rounded-xl px-3 py-2 text-sm"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowNewCity(false);
+                        setFormData({ ...formData, City: "" });
+                      }}
+                      className="text-xs text-blue-400 hover:underline inline-block"
+                    >
+                      الرجوع لاختيار مدينة من قائمة المدن
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-gray-300 mb-1">العنوان (Adresse)</label>
+                <input
+                  type="text"
+                  value={formData.Region}
+                  placeholder="مثال: حي الرياض، شارع النخيل"
+                  onChange={e => setFormData({ ...formData, Region: e.target.value })}
+                  className="w-full bg-[#0d1426] border border-[#2d3a54] text-white rounded-xl px-3 py-2 text-sm focus:border-blue-500/50"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-gray-300 mb-1">الحالة (Condition)</label>
+                {!showNewCondition ? (
+                  <select
+                    translate="no"
                     value={formData.Condition}
-                    onChange={e => setFormData({ ...formData, Condition: e.target.value })}
-                    className="w-full bg-[#0d1426] border border-blue-500/50 text-white rounded-xl px-3 py-2 text-sm"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setShowNewCondition(false);
-                      setFormData({ ...formData, Condition: "" });
+                    onChange={e => {
+                      if (e.target.value === "__NEW__") {
+                        setShowNewCondition(true);
+                        setFormData({ ...formData, Condition: "" });
+                      } else {
+                        setFormData({ ...formData, Condition: e.target.value });
+                      }
                     }}
-                    className="text-xs text-blue-400 hover:underline inline-block"
+                    className={`notranslate w-full border rounded-xl px-3 py-2 text-xs focus:border-blue-500/50 ${
+                      ["Ne repond pas", "Anule", "Pas intéresse"].includes(formData.Condition)
+                        ? "bg-red-600 text-white border-red-500 font-semibold"
+                        : "bg-[#0d1426] border-white/10 text-white"
+                    }`}
                   >
-                    Retour / الرجوع
-                  </button>
-                </div>
-              )}
-            </div>
+                    <option value="" translate="no" className="notranslate bg-[#0f172a] text-gray-500"> </option>
+                    {CONDITIONS.map(c => (
+                      <option 
+                        key={c.value} 
+                        value={c.value} 
+                        translate="no"
+                        className={`notranslate bg-[#0f172a] ${
+                          ["Ne repond pas", "Anule", "Pas intéresse"].includes(c.value)
+                            ? "text-red-500 font-semibold"
+                            : "text-white"
+                        }`}
+                      >
+                        {c.label}
+                      </option>
+                    ))}
+                    <option value="__NEW__" translate="no" className="notranslate text-blue-400 font-bold bg-[#0f172a]">➕ Ajouter nouveau...</option>
+                  </select>
+                ) : (
+                  <div className="space-y-1.5 text-right">
+                    <input
+                      type="text"
+                      placeholder="Condition..."
+                      value={formData.Condition}
+                      onChange={e => setFormData({ ...formData, Condition: e.target.value })}
+                      className="w-full bg-[#0d1426] border border-blue-500/50 text-white rounded-xl px-3 py-2 text-sm"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowNewCondition(false);
+                        setFormData({ ...formData, Condition: "" });
+                      }}
+                      className="text-xs text-blue-400 hover:underline inline-block"
+                    >
+                      Retour / الرجوع
+                    </button>
+                  </div>
+                )}
+              </div>
 
-            <div>
-              <label className="block text-xs font-medium text-gray-300 mb-1">شركة الشحن (Livreur)</label>
-              <select
-                value={formData.Livreur}
-                onChange={e => setFormData({ ...formData, Livreur: e.target.value })}
-                className="w-full bg-[#0d1426] border border-white/10 text-white rounded-xl px-3 py-2 text-xs focus:border-blue-500/50"
-              >
-                <option value="" className="bg-[#0f172a] text-gray-500"> </option>
-                {livreurOptions.map(l => (
-                  <option key={l} value={l} className="bg-[#0f172a]">{l}</option>
-                ))}
-              </select>
-            </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-300 mb-1 font-sans">شركة الشحن (Livreur)</label>
+                {!showNewLivreur ? (
+                  <select
+                    value={formData.Livreur}
+                    onChange={e => {
+                      if (e.target.value === "__NEW__") {
+                        setShowNewLivreur(true);
+                        setFormData({ ...formData, Livreur: "" });
+                      } else {
+                        setFormData({ ...formData, Livreur: e.target.value });
+                      }
+                    }}
+                    className="w-full bg-[#0d1426] border border-white/10 text-white rounded-xl px-3 py-2 text-xs focus:border-blue-500/50"
+                  >
+                    <option value="" className="bg-[#0f172a] text-gray-500"> </option>
+                    {livreurOptions.map(l => (
+                      <option key={l} value={l} className="bg-[#0f172a]">{l}</option>
+                    ))}
+                    <option value="__NEW__" className="text-blue-400 font-bold">➕ إضافة موزع جديد...</option>
+                  </select>
+                ) : (
+                  <div className="space-y-1.5 text-right">
+                    <input
+                      type="text"
+                      required
+                      placeholder="اكتب اسم الموزع الجديد..."
+                      value={formData.Livreur}
+                      onChange={e => setFormData({ ...formData, Livreur: e.target.value })}
+                      className="w-full bg-[#0d1426] border border-blue-500/50 text-white rounded-xl px-3 py-2 text-sm"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowNewLivreur(false);
+                        setFormData({ ...formData, Livreur: "" });
+                      }}
+                      className="text-xs text-blue-400 hover:underline inline-block"
+                    >
+                      الرجوع لاختيار موزع من القائمة
+                    </button>
+                  </div>
+                )}
+              </div>
 
-            <div>
-              <label className="block text-xs font-medium text-gray-300 mb-1">حالة التوصيل (Livraison)</label>
-              {!showNewDelivery ? (
-                <select
-                  value={formData.delivery}
-                  onChange={e => {
-                    if (e.target.value === "__NEW__") {
-                      setShowNewDelivery(true);
-                      setFormData({ ...formData, delivery: "" });
-                    } else {
-                      setFormData({ ...formData, delivery: e.target.value });
-                    }
-                  }}
-                  className="w-full bg-[#0d1426] border border-white/10 text-white rounded-xl px-3 py-2 text-xs focus:border-blue-500/50"
-                >
-                  <option value="" className="bg-[#0f172a] text-gray-500"> </option>
-                  {DELIVERY_STATUSES.map(d => (
-                    <option key={d.value} value={d.value} className="bg-[#0f172a]">{d.label}</option>
-                  ))}
-                  <option value="__NEW__" className="text-blue-400 font-bold">➕ Ajouter nouveau...</option>
-                </select>
-              ) : (
-                <div className="space-y-1.5 text-right">
-                  <input
-                    type="text"
-                    placeholder="Statut..."
+              <div>
+                <label className="block text-xs font-medium text-gray-300 mb-1">حالة التوصيل (Livraison)</label>
+                {!showNewDelivery ? (
+                  <select
                     value={formData.delivery}
-                    onChange={e => setFormData({ ...formData, delivery: e.target.value })}
-                    className="w-full bg-[#0d1426] border border-blue-500/50 text-white rounded-xl px-3 py-2 text-sm"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setShowNewDelivery(false);
-                      setFormData({ ...formData, delivery: "" });
+                    onChange={e => {
+                      if (e.target.value === "__NEW__") {
+                        setShowNewDelivery(true);
+                        setFormData({ ...formData, delivery: "" });
+                      } else {
+                        setFormData({ ...formData, delivery: e.target.value });
+                      }
                     }}
-                    className="text-xs text-blue-400 hover:underline inline-block"
+                    className="w-full bg-[#0d1426] border border-white/10 text-white rounded-xl px-3 py-2 text-xs focus:border-blue-500/50"
                   >
-                    Retour / الرجوع
-                  </button>
-                </div>
-              )}
+                    <option value="" className="bg-[#0f172a] text-gray-500"> </option>
+                    {DELIVERY_STATUSES.map(d => (
+                      <option key={d.value} value={d.value} className="bg-[#0f172a]">{d.label}</option>
+                    ))}
+                    <option value="__NEW__" className="text-blue-400 font-bold">➕ Ajouter nouveau...</option>
+                  </select>
+                ) : (
+                  <div className="space-y-1.5 text-right">
+                    <input
+                      type="text"
+                      placeholder="Statut..."
+                      value={formData.delivery}
+                      onChange={e => setFormData({ ...formData, delivery: e.target.value })}
+                      className="w-full bg-[#0d1426] border border-blue-500/50 text-white rounded-xl px-3 py-2 text-sm"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowNewDelivery(false);
+                        setFormData({ ...formData, delivery: "" });
+                      }}
+                      className="text-xs text-blue-400 hover:underline inline-block"
+                    >
+                      Retour / الرجوع
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
+
           </div>
 
           {/* Quick Preview Area */}
@@ -407,7 +515,7 @@ export const SaleAddModal: React.FC<SaleAddModalProps> = ({ onClose, onSave, pur
           </div>
 
           {/* Buttons */}
-          <div className="flex gap-3 justify-end pt-4 border-t border-white/5">
+          <div className="flex gap-3 justify-end pt-4 border-t border-white/5 bg-[#0d1426]/20 p-2 rounded-xl">
             <button
               type="button"
               onClick={onClose}
@@ -768,9 +876,7 @@ export const GenericModal: React.FC<GenericModalProps> = ({ onClose, onSave, tit
                         {f.options?.map(opt => (
                           <option key={opt} value={opt} className="bg-[#0f172a]">{opt}</option>
                         ))}
-                        {f.key !== "Livreur" && (
-                          <option value="__NEW__" className="text-blue-400 font-bold">➕ Ajouter nouveau...</option>
-                        )}
+                        <option value="__NEW__" className="text-blue-400 font-bold">➕ Ajouter nouveau...</option>
                       </select>
                     ) : (
                       <div className="space-y-1 text-right">

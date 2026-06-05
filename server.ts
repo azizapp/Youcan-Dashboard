@@ -12,8 +12,19 @@ const isVercel = !!process.env.VERCEL;
 const rootDir = process.cwd();
 let DB_FILE = path.join(rootDir, "data", "db.json");
 
-// In serverless environments, or if /data directory is not writable, copy to/use writable /tmp/db.json
-const useTmpDb = isServerless || !fs.existsSync(path.join(rootDir, "data"));
+// Ensure the local data directory exists when running locally
+const localDataDir = path.join(rootDir, "data");
+if (!isServerless && !fs.existsSync(localDataDir)) {
+  try {
+    fs.mkdirSync(localDataDir, { recursive: true });
+    console.log(`Created database directory at: ${localDataDir}`);
+  } catch (err) {
+    console.error("Failed to create local data directory:", err);
+  }
+}
+
+// In serverless environments, copy to/use writable /tmp/db.json
+const useTmpDb = isServerless;
 
 if (useTmpDb) {
   const tmpDbFile = "/tmp/db.json";
@@ -329,6 +340,219 @@ async function autoPushToGoogleSheets(sheetName: string, userAccessToken?: strin
   }
 }
 
+let SYNC_FILE = path.join(rootDir, "data", "background_sync.json");
+if (isServerless) {
+  SYNC_FILE = "/tmp/background_sync.json";
+}
+
+// Ensure the sync configuration file exists and initialize defaults
+function ensureSyncFileExists() {
+  const dir = path.dirname(SYNC_FILE);
+  if (dir && dir !== "/" && dir !== "/tmp" && !fs.existsSync(dir)) {
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+    } catch (err) {
+      console.warn("Could not create sync directory:", err);
+    }
+  }
+
+  if (!fs.existsSync(SYNC_FILE)) {
+    const initialSyncState = {
+      status: "idle", // "idle", "syncing", "error"
+      lastSyncTime: new Date().toISOString(),
+      lastError: null,
+      queue: [] // Array of { type: "push" | "pull", sheetName?: string, userAccessToken?: string }
+    };
+    fs.writeFileSync(SYNC_FILE, JSON.stringify(initialSyncState, null, 2), "utf8");
+  }
+}
+
+function readSyncState() {
+  ensureSyncFileExists();
+  try {
+    return JSON.parse(fs.readFileSync(SYNC_FILE, "utf8"));
+  } catch (err) {
+    console.error("Error reading sync state, resetting:", err);
+    const initialSyncState = {
+      status: "idle",
+      lastSyncTime: new Date().toISOString(),
+      lastError: null,
+      queue: []
+    };
+    fs.writeFileSync(SYNC_FILE, JSON.stringify(initialSyncState, null, 2), "utf8");
+    return initialSyncState;
+  }
+}
+
+function writeSyncState(state: any) {
+  ensureSyncFileExists();
+  fs.writeFileSync(SYNC_FILE, JSON.stringify(state, null, 2), "utf8");
+}
+
+let isProcessingSync = false;
+
+// Pull from Google Sheets in the background dynamically updating local db.json
+async function performBackgroundPull(userAccessToken?: string): Promise<void> {
+  const db = readDb();
+  const settings = db.googleSheetsSettings;
+  
+  if (!settings || !settings.spreadsheetId) {
+    throw new Error("لم يتم تكوين معرف ورقة العمل داصبورد (Spreadsheet ID)!");
+  }
+  
+  const spreadsheetId = settings.spreadsheetId;
+  const hasCreds = !!userAccessToken || (!!settings.clientEmail && !!settings.privateKey) || !!settings.apiKey;
+  if (!hasCreds) {
+    throw new Error("يتطلب جلب البيانات تفعيل تسجيل الدخول بـ Google أو إدخال حساب خدمة Google Service Account.");
+  }
+  
+  const salesHeaders = [
+    "Order ID", "Order date", "Full name", "Phone", "City", "Region", 
+    "Product name", "Product URL", "Variant price", "Total quantity", 
+    "Total price", "Condition", "Livreur", "delivery", "prix d'achat", 
+    "Frais livraison", "Bénéfice", "Fournisseur", "Fourni price", "WHATSAPP"
+  ];
+  const purchasesHeaders = ["ID", "date", "nombre", "Produit", "Code", "Prix Unit", "total", "Fournisseur", "Prix de vente"];
+  const paymentsHeaders = ["ID", "date", "Payment", "Fournisseur"];
+  const expensesHeaders = ["ID", "date", "Prix", "Taper"];
+  
+  console.log(`[Background Sync] Starting data pull from Sheets spreadsheet: ${spreadsheetId}`);
+  
+  let salesRaw: any[][] | null = null;
+  let purchasesRaw: any[][] | null = null;
+  let paymentsRaw: any[][] | null = null;
+  let expensesRaw: any[][] | null = null;
+  
+  let fetchedAtLeastOne = false;
+  let lastError: any = null;
+
+  try {
+    salesRaw = await fetchValuesFromSheet(spreadsheetId, "Youcan-Orders", settings, userAccessToken);
+    fetchedAtLeastOne = true;
+  } catch (e: any) {
+    console.warn("[Background Sync] Skipped/Failed Youcan-Orders:", e);
+    lastError = e;
+  }
+
+  try {
+    purchasesRaw = await fetchValuesFromSheet(spreadsheetId, "Achat", settings, userAccessToken);
+    fetchedAtLeastOne = true;
+  } catch (e: any) {
+    console.warn("[Background Sync] Skipped/Failed Achat:", e);
+    if (!lastError) lastError = e;
+  }
+
+  try {
+    paymentsRaw = await fetchValuesFromSheet(spreadsheetId, "Payments", settings, userAccessToken);
+    fetchedAtLeastOne = true;
+  } catch (e: any) {
+    console.warn("[Background Sync] Skipped/Failed Payments:", e);
+    if (!lastError) lastError = e;
+  }
+
+  try {
+    expensesRaw = await fetchValuesFromSheet(spreadsheetId, "Expenses", settings, userAccessToken);
+    fetchedAtLeastOne = true;
+  } catch (e: any) {
+    console.warn("[Background Sync] Skipped/Failed Expenses:", e);
+    if (!lastError) lastError = e;
+  }
+
+  if (!fetchedAtLeastOne && lastError) {
+    throw lastError;
+  }
+  
+  if (salesRaw) db.sales = parseSheetRowsToObjects(salesRaw, salesHeaders);
+  if (purchasesRaw) db.purchases = parseSheetRowsToObjects(purchasesRaw, purchasesHeaders);
+  if (paymentsRaw) db.payments = parseSheetRowsToObjects(paymentsRaw, paymentsHeaders);
+  if (expensesRaw) db.expenses = parseSheetRowsToObjects(expensesRaw, expensesHeaders);
+  
+  writeDb(db);
+  console.log("[Background Sync] Successfully updated local db.json with pulled records.");
+}
+
+async function processSyncQueue() {
+  if (isProcessingSync) return;
+  isProcessingSync = true;
+  
+  try {
+    const syncState = readSyncState();
+    if (syncState.queue.length === 0) {
+      isProcessingSync = false;
+      return;
+    }
+    
+    syncState.status = "syncing";
+    syncState.lastError = null;
+    writeSyncState(syncState);
+    
+    while (syncState.queue.length > 0) {
+      const task = syncState.queue[0];
+      console.log(`[Background Sync Queue] Executing task of type "${task.type}" for ${task.sheetName || "all sheets"}`);
+      
+      try {
+        if (task.type === "push") {
+          await autoPushToGoogleSheets(task.sheetName, task.userAccessToken);
+        } else if (task.type === "pull") {
+          await performBackgroundPull(task.userAccessToken);
+        }
+        
+        // Success: reload sync state, shift first item, log time
+        const stateToUpdate = readSyncState();
+        stateToUpdate.queue.shift();
+        stateToUpdate.lastSyncTime = new Date().toISOString();
+        stateToUpdate.lastError = null;
+        writeSyncState(stateToUpdate);
+      } catch (err: any) {
+        console.error("[Background Sync Queue] Critical error executing task:", err);
+        const stateToUpdate = readSyncState();
+        stateToUpdate.status = "error";
+        stateToUpdate.lastError = err.message || err.toString();
+        // Remove failing/stuck tasks to prevent infinite crash loop
+        stateToUpdate.queue.shift();
+        writeSyncState(stateToUpdate);
+        break; // Stop and let next execution cycle retry or diagnostic
+      }
+    }
+    
+    const finalSyncState = readSyncState();
+    if (finalSyncState.queue.length === 0 && finalSyncState.status !== "error") {
+      finalSyncState.status = "idle";
+      writeSyncState(finalSyncState);
+    }
+  } catch (e) {
+    console.error("[Background Sync Queue] Runner exception:", e);
+  } finally {
+    isProcessingSync = false;
+  }
+}
+
+function addSyncTask(type: "push" | "pull", sheetName?: string, userAccessToken?: string) {
+  const syncState = readSyncState();
+  
+  // Guard against duplicate redundant tasks already in queue
+  const isDuplicate = syncState.queue.some((task: any) => {
+    return task.type === type && task.sheetName === sheetName;
+  });
+  
+  if (!isDuplicate) {
+    syncState.queue.push({
+      type,
+      sheetName,
+      userAccessToken,
+      timestamp: new Date().toISOString()
+    });
+    if (syncState.status === "idle") {
+      syncState.status = "pending";
+    }
+    writeSyncState(syncState);
+  }
+  
+  processSyncQueue().catch(err => {
+    console.error("[Background Sync] Failed to process queue immediately:", err);
+  });
+}
+
 // Normalize Header Helper (same as in Code.gs)
 function normalizeHeader(h: any): string {
   if (h === null || h === undefined) return "";
@@ -460,14 +684,10 @@ app.post("/api/save-generic", async (req, res) => {
       userAccessToken = authHeader.substring(7);
     }
     
-    // Push the updated sheet to Google Sheets immediately and await completion for consistency
-    try {
-      await autoPushToGoogleSheets(sheetName, userAccessToken);
-    } catch (e) {
-      console.error("Auto-push to Google Sheets failed:", e);
-    }
+    // Add background task to push update asynchronously
+    addSyncTask("push", sheetName, userAccessToken);
     
-    res.json({ success: true });
+    res.json({ success: true, message: "تم التغيير بنجاح وجاري المزامنة في الخلفية" });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.toString() });
   }
@@ -513,13 +733,10 @@ app.post("/api/delete-generic", async (req, res) => {
         userAccessToken = authHeader.substring(7);
       }
       
-      try {
-        await autoPushToGoogleSheets(sheetName, userAccessToken);
-      } catch (e) {
-        console.error("Auto-push to Google Sheets failed for delete:", e);
-      }
+      // Add background task to push delete asynchronously
+      addSyncTask("push", sheetName, userAccessToken);
       
-      res.json({ success: true });
+      res.json({ success: true, message: "تم الحذف بنجاح وجاري المزامنة في الخلفية" });
     } else {
       res.status(404).json({ success: false, error: "Row not found for deleting" });
     }
@@ -592,13 +809,10 @@ app.post("/api/update-order-row", async (req, res) => {
       userAccessToken = authHeader.substring(7);
     }
     
-    try {
-      await autoPushToGoogleSheets(targetSheet, userAccessToken);
-    } catch (e) {
-      console.error("Auto-push to Google Sheets failed for update:", e);
-    }
+    // Add background task to push update asynchronously
+    addSyncTask("push", targetSheet, userAccessToken);
     
-    res.json({ success: true, updatedColumns: cnt });
+    res.json({ success: true, updatedColumns: cnt, message: "تم التعديل وجاري المزامنة في الخلفية" });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.toString() });
   }
@@ -867,111 +1081,21 @@ function parseSheetRowsToObjects(values: any[][], expectedHeaders: string[]): an
 // 3. POST Sync Pull
 app.post("/api/google-sheets/sync-pull", async (req, res) => {
   try {
-    const db = readDb();
-    const settings = db.googleSheetsSettings;
-    
-    if (!settings || !settings.spreadsheetId) {
-      return res.status(400).json({ success: false, error: "لم يتم تكوين معرف ورقة العمل داصبورد (Spreadsheet ID)!" });
-    }
-    
-    const spreadsheetId = settings.spreadsheetId;
-    
-    // Extract userAccessToken from Authorization header if present
     const authHeader = req.headers.authorization;
     let userAccessToken: string | undefined;
     if (authHeader && authHeader.startsWith("Bearer ")) {
       userAccessToken = authHeader.substring(7);
     }
-
-    // Verify if any credentials exist to avoid throwing server-side exceptions on load
-    const hasCreds = !!userAccessToken || (!!settings.clientEmail && !!settings.privateKey) || !!settings.apiKey;
-    if (!hasCreds) {
-      return res.json({ 
-        success: false, 
-        error: "يتطلب جلب البيانات تفعيل تسجيل الدخول بـ Google أو إدخال حساب خدمة Google Service Account.",
-        skipped: true
-      });
-    }
     
-    // Try to pull data for all sheets matching core schemas
-    const salesHeaders = [
-      "Order ID", "Order date", "Full name", "Phone", "City", "Region", 
-      "Product name", "Product URL", "Variant price", "Total quantity", 
-      "Total price", "Condition", "Livreur", "delivery", "prix d'achat", 
-      "Frais livraison", "Bénéfice", "Fournisseur", "Fourni price", "WHATSAPP"
-    ];
-    const purchasesHeaders = ["ID", "date", "nombre", "Produit", "Code", "Prix Unit", "total", "Fournisseur", "Prix de vente"];
-    const paymentsHeaders = ["ID", "date", "Payment", "Fournisseur"];
-    const expensesHeaders = ["ID", "date", "Prix", "Taper"];
-    
-    console.log(`Starting spreadsheet pull for ID: ${spreadsheetId}`);
-    
-    let salesRaw: any[][] | null = null;
-    let purchasesRaw: any[][] | null = null;
-    let paymentsRaw: any[][] | null = null;
-    let expensesRaw: any[][] | null = null;
-    
-    let fetchedAtLeastOne = false;
-    let lastError: any = null;
-
-    try {
-      salesRaw = await fetchValuesFromSheet(spreadsheetId, "Youcan-Orders", settings, userAccessToken);
-      fetchedAtLeastOne = true;
-    } catch (e: any) {
-      console.warn("Could not fetch Youcan-Orders:", e);
-      lastError = e;
-    }
-
-    try {
-      purchasesRaw = await fetchValuesFromSheet(spreadsheetId, "Achat", settings, userAccessToken);
-      fetchedAtLeastOne = true;
-    } catch (e: any) {
-      console.warn("Could not fetch Achat:", e);
-      if (!lastError) lastError = e;
-    }
-
-    try {
-      paymentsRaw = await fetchValuesFromSheet(spreadsheetId, "Payments", settings, userAccessToken);
-      fetchedAtLeastOne = true;
-    } catch (e: any) {
-      console.warn("Could not fetch Payments:", e);
-      if (!lastError) lastError = e;
-    }
-
-    try {
-      expensesRaw = await fetchValuesFromSheet(spreadsheetId, "Expenses", settings, userAccessToken);
-      fetchedAtLeastOne = true;
-    } catch (e: any) {
-      console.warn("Could not fetch Expenses:", e);
-      if (!lastError) lastError = e;
-    }
-
-    if (!fetchedAtLeastOne && lastError) {
-      return res.json({
-        success: false,
-        error: lastError.toString()
-      });
-    }
-    
-    // Parse
-    if (salesRaw) db.sales = parseSheetRowsToObjects(salesRaw, salesHeaders);
-    if (purchasesRaw) db.purchases = parseSheetRowsToObjects(purchasesRaw, purchasesHeaders);
-    if (paymentsRaw) db.payments = parseSheetRowsToObjects(paymentsRaw, paymentsHeaders);
-    if (expensesRaw) db.expenses = parseSheetRowsToObjects(expensesRaw, expensesHeaders);
-    
-    writeDb(db);
+    // Add "pull" background task
+    addSyncTask("pull", undefined, userAccessToken);
     
     res.json({ 
       success: true, 
-      pulledIndicesCount: {
-        sales: db.sales.length,
-        purchases: db.purchases.length,
-        payments: db.payments.length,
-        expenses: db.expenses.length
-      }
+      message: "تم بدء عملية جلب البيانات من Google Sheets في الخلفية." 
     });
   } catch (err: any) {
-    console.error("Sync pull error:", err);
+    console.error("Sync pull enqueue error:", err);
     res.status(500).json({ success: false, error: err.toString() });
   }
 });
@@ -992,91 +1116,54 @@ function formatObjectsToSheetRows(objects: any[], headers: string[]): any[][] {
 // 4. POST Sync Push
 app.post("/api/google-sheets/sync-push", async (req, res) => {
   try {
-    const db = readDb();
-    const settings = db.googleSheetsSettings;
-    
-    if (!settings || !settings.spreadsheetId) {
-      return res.status(400).json({ success: false, error: "لم يتم تكوين معرف ورقة العمل داصبورد (Spreadsheet ID)!" });
-    }
-
-    // Extract userAccessToken from Authorization header if present
     const authHeader = req.headers.authorization;
     let userAccessToken: string | undefined;
     if (authHeader && authHeader.startsWith("Bearer ")) {
       userAccessToken = authHeader.substring(7);
     }
-
-    if (!userAccessToken && (!settings.clientEmail || !settings.privateKey)) {
-      return res.status(400).json({ success: false, error: "ملاذ النشر يتطلب تفعيل تسجيل الدخول بـ Google أو إعداد حساب الخدمة Google Service Account." });
-    }
     
-    const spreadsheetId = settings.spreadsheetId;
+    // Queue all four tables for sync-push in the background
+    addSyncTask("push", "Youcan-Orders", userAccessToken);
+    addSyncTask("push", "Achat", userAccessToken);
+    addSyncTask("push", "Payments", userAccessToken);
+    addSyncTask("push", "Expenses", userAccessToken);
     
-    const salesHeaders = [
-      "Order ID", "Order date", "Full name", "Phone", "City", "Region", 
-      "Product name", "Product URL", "Variant price", "Total quantity", 
-      "Total price", "Condition", "Livreur", "delivery", "prix d'achat", 
-      "Frais livraison", "Bénéfice", "Fournisseur", "Fourni price", "WHATSAPP"
-    ];
-    const purchasesHeaders = ["ID", "date", "nombre", "Produit", "Code", "Prix Unit", "total", "Fournisseur", "Prix de vente"];
-    const paymentsHeaders = ["ID", "date", "Payment", "Fournisseur"];
-    const expensesHeaders = ["ID", "date", "Prix", "Taper"];
-    
-    const salesRows = formatObjectsToSheetRows(db.sales, salesHeaders);
-    const purchasesRows = formatObjectsToSheetRows(db.purchases, purchasesHeaders);
-    const paymentsRows = formatObjectsToSheetRows(db.payments, paymentsHeaders);
-    const expensesRows = formatObjectsToSheetRows(db.expenses, expensesHeaders);
-    
-    console.log(`Starting spreadsheet push for ID: ${spreadsheetId}`);
-    
-    let pushedAtLeastOne = false;
-    let pushError: any = null;
-
-    try {
-      await writeValuesToSheet(spreadsheetId, "Youcan-Orders", salesRows, settings, userAccessToken);
-      pushedAtLeastOne = true;
-    } catch (e: any) {
-      console.error("Failed to push Youcan-Orders:", e);
-      pushError = e;
-    }
-
-    try {
-      await writeValuesToSheet(spreadsheetId, "Achat", purchasesRows, settings, userAccessToken);
-      pushedAtLeastOne = true;
-    } catch (e: any) {
-      console.error("Failed to push Achat:", e);
-      if (!pushError) pushError = e;
-    }
-
-    try {
-      await writeValuesToSheet(spreadsheetId, "Payments", paymentsRows, settings, userAccessToken);
-      pushedAtLeastOne = true;
-    } catch (e: any) {
-      console.error("Failed to push Payments:", e);
-      if (!pushError) pushError = e;
-    }
-
-    try {
-      await writeValuesToSheet(spreadsheetId, "Expenses", expensesRows, settings, userAccessToken);
-      pushedAtLeastOne = true;
-    } catch (e: any) {
-      console.error("Failed to push Expenses:", e);
-      if (!pushError) pushError = e;
-    }
-
-    if (!pushedAtLeastOne && pushError) {
-      throw pushError;
-    }
-    
-    res.json({ success: true, message: "تم ترحيل وتعديل جميع البيانات على ورقة العمل بنجاح!" });
+    res.json({ 
+      success: true, 
+      message: "تم بدء عملية ترحيل وتحديث البيانات على Google Sheets في الخلفية بنجاح." 
+    });
   } catch (err: any) {
-    console.error("Sync push error:", err);
+    console.error("Sync push enqueue error:", err);
+    res.status(500).json({ success: false, error: err.toString() });
+  }
+});
+
+// 5. GET Background Sync Status
+app.get("/api/background-sync/status", (req, res) => {
+  try {
+    const state = readSyncState();
+    res.json({
+      success: true,
+      status: state.status, // "idle", "syncing", "error", "pending"
+      lastSyncTime: state.lastSyncTime,
+      lastError: state.lastError,
+      queueSize: state.queue?.length || 0
+    });
+  } catch (err: any) {
     res.status(500).json({ success: false, error: err.toString() });
   }
 });
 
 // Setup Vite & static serving
 async function startServer() {
+  // Start periodic background sync processor
+  console.log("[Background Sync] Initializing active background task scheduler (5s interval)...");
+  setInterval(() => {
+    processSyncQueue().catch(err => {
+      console.error("[Background Sync Scheduler Error]:", err);
+    });
+  }, 5000);
+
   if (process.env.NODE_ENV !== "production") {
     const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({

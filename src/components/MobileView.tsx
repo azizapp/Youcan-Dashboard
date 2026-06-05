@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { Order, Purchase, Payment, Expense } from "../types";
+import { matchesRobustSearch } from "../lib/searchUtils";
 import { MOROCCAN_CITIES, CONDITIONS, DELIVERY_STATUSES, LIVREURS, formatCurrency, formatDateDisplay, generateWhatsAppUrl, validatePhone, getCalculatedFields } from "../data";
 import { Home, Users, Package, CreditCard, MoreHorizontal, ShieldCheck, TrendingUp, AlertTriangle, Sprout, ShoppingCart, Info, Search, Plus, Filter, Phone, PhoneCall, MessageCircle, X, ChevronDown, Check, Coins, Calendar, RefreshCcw } from "lucide-react";
 
@@ -58,7 +59,7 @@ export const MobileView: React.FC<MobileViewProps> = ({ sales, purchases, paymen
     "Product name": "",
     "Variant price": "" as any,
     "Product URL": "",
-    "Total quantity": "" as any,
+    "Total quantity": 1,
     "Condition": "",
     "delivery": "",
     "Livreur": ""
@@ -159,7 +160,7 @@ export const MobileView: React.FC<MobileViewProps> = ({ sales, purchases, paymen
       "Product name": "",
       "Variant price": "" as any,
       "Product URL": "",
-      "Total quantity": "" as any,
+      "Total quantity": 1,
       "Condition": "",
       "delivery": "",
       "Livreur": ""
@@ -217,11 +218,7 @@ export const MobileView: React.FC<MobileViewProps> = ({ sales, purchases, paymen
 
   // Filter Sales list for mobile UI
   const filteredSalesList = sales.filter(s => {
-    const matchesSearch = !salesSearch ? true : (
-      (s["Order ID"] || "").toLowerCase().includes(salesSearch.toLowerCase()) ||
-      (s["Full name"] || "").toLowerCase().includes(salesSearch.toLowerCase()) ||
-      (s["Phone"] || "").toLowerCase().includes(salesSearch.toLowerCase())
-    );
+    const matchesSearch = matchesRobustSearch(s, salesSearch);
 
     const matchesCond = !selectedCondition ? true : s.Condition === selectedCondition;
     const matchesDeliv = !selectedDelivery ? true : s.delivery === selectedDelivery;
@@ -699,13 +696,14 @@ export const MobileView: React.FC<MobileViewProps> = ({ sales, purchases, paymen
               <div>
                 <label className="block text-[10px] text-gray-400 mb-1">الإجراء (Condition)</label>
                 <select
+                  translate="no"
                   value={selectedCondition}
                   onChange={e => setSelectedCondition(e.target.value)}
-                  className="w-full bg-[#0d1426] border border-white/10 text-white rounded-xl px-3 py-2 text-xs"
+                  className="notranslate w-full bg-[#0d1426] border border-white/10 text-white rounded-xl px-3 py-2 text-xs"
                 >
-                  <option value="">الكل</option>
+                  <option value="" translate="no" className="notranslate">الكل</option>
                   {CONDITIONS.map(c => (
-                    <option key={c.value} value={c.value}>{c.label}</option>
+                    <option key={c.value} value={c.value} translate="no" className="notranslate">{c.label}</option>
                   ))}
                 </select>
               </div>
@@ -788,12 +786,12 @@ export const MobileView: React.FC<MobileViewProps> = ({ sales, purchases, paymen
               </div>
 
               <div>
-                <label className="block text-[10px] text-gray-400 mb-0.5">المدينة والوجهة</label>
+                <label className="block text-[10px] text-gray-400 mb-0.5">المدينة والعنوان (Adresse)</label>
                 <div className="grid grid-cols-2 gap-2">
                   <select
                     value={newSaleForm.City}
                     required
-                    onChange={e => setNewSaleForm({ ...newSaleForm, City: e.target.value, Region: e.target.value })}
+                    onChange={e => setNewSaleForm({ ...newSaleForm, City: e.target.value })}
                     className="bg-[#0d1426] border border-white/10 text-white rounded-xl px-2.5 py-1.5 text-xs"
                   >
                     <option value="" disabled className="italic">اختر المدينة...</option>
@@ -803,7 +801,7 @@ export const MobileView: React.FC<MobileViewProps> = ({ sales, purchases, paymen
                   </select>
                   <input
                     type="text"
-                    placeholder="الجهة المستهدفة"
+                    placeholder="العنوان بالتفصيل"
                     value={newSaleForm.Region}
                     onChange={e => setNewSaleForm({ ...newSaleForm, Region: e.target.value })}
                     className="bg-[#0d1426] border border-white/10 text-white rounded-xl px-2.5 py-1.5 text-xs"
@@ -847,14 +845,15 @@ export const MobileView: React.FC<MobileViewProps> = ({ sales, purchases, paymen
                 <div>
                   <label className="block text-[10px] text-gray-400 mb-0.5">الحالة (Condition)</label>
                   <select
+                    translate="no"
                     value={newSaleForm.Condition}
                     required
                     onChange={e => setNewSaleForm({ ...newSaleForm, Condition: e.target.value })}
-                    className="w-full bg-[#0d1426] border border-white/10 text-white rounded-xl px-2.5 py-1.5 text-xs"
+                    className="notranslate w-full bg-[#0d1426] border border-white/10 text-white rounded-xl px-2.5 py-1.5 text-xs"
                   >
-                    <option value="" disabled className="italic">اختر الإجراء...</option>
+                    <option value="" disabled className="italic" translate="no">اختر الإجراء...</option>
                     {CONDITIONS.map(c => (
-                      <option key={c.value} value={c.value}>{c.label}</option>
+                      <option key={c.value} value={c.value} translate="no" className="notranslate">{c.label}</option>
                     ))}
                   </select>
                 </div>
@@ -961,12 +960,28 @@ export const MobileView: React.FC<MobileViewProps> = ({ sales, purchases, paymen
                 <div>
                   <label className="block text-[10px] text-gray-500 mb-1">الإجراء التشغيلي (Condition)</label>
                   <select
+                    translate="no"
                     value={selectedOrderDetail.Condition || "Confirmed"}
                     onChange={e => handleDetailUpdate(selectedOrderDetail._rowNum || 2, "Condition", e.target.value, selectedOrderDetail)}
-                    className="w-full bg-[#111930] border border-white/5 text-white rounded-xl px-2.5 py-1.5 text-xs"
+                    className={`notranslate w-full rounded-xl px-2.5 py-1.5 text-xs ${
+                      ["Ne repond pas", "Anule", "Pas intéresse"].includes(selectedOrderDetail.Condition || "Confirmed")
+                        ? "bg-red-600 text-white border-red-500 font-semibold"
+                        : "bg-[#111930] border-white/5 text-white"
+                    }`}
                   >
                     {CONDITIONS.map(c => (
-                      <option key={c.value} value={c.value}>{c.label}</option>
+                      <option 
+                        key={c.value} 
+                        value={c.value}
+                        translate="no"
+                        className={`notranslate bg-[#0f172a] ${
+                          ["Ne repond pas", "Anule", "Pas intéresse"].includes(c.value)
+                            ? "text-red-500 font-semibold"
+                            : "text-white"
+                        }`}
+                      >
+                        {c.label}
+                      </option>
                     ))}
                   </select>
                 </div>

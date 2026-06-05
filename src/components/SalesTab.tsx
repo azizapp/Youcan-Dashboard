@@ -3,6 +3,7 @@ import { Order, Purchase } from "../types";
 import { MOROCCAN_CITIES, CONDITIONS, DELIVERY_STATUSES, LIVREURS, formatCurrency, formatDateDisplay, generateWhatsAppUrl } from "../data";
 import { Search, Filter, Plus, Calendar, RotateCcw, Edit, Phone, MessageCircle, ExternalLink, ChevronRight, ChevronLeft, ArrowUpDown, ArrowUp, ArrowDown } from "lucide-react";
 import { ConfirmationDialog } from "./ConfirmationDialog";
+import { WhatsAppSequentialSendModal } from "./WhatsAppSequentialSendModal";
 
 interface SalesTabProps {
   sales: Order[];
@@ -12,6 +13,17 @@ interface SalesTabProps {
   onUpdateOrder: (rowNum: number, updates: any) => void;
   salesPreset?: "all" | "delivery_requests" | "delivery_status" | "no_status";
   setSalesPreset?: (preset: "all" | "delivery_requests" | "delivery_status" | "no_status") => void;
+  searchQuery: string;
+  setSearchQuery: (query: string) => void;
+  selectedCondition: string;
+  setSelectedCondition: (cond: string) => void;
+  selectedCity: string;
+  setSelectedCity: (city: string) => void;
+  selectedLivreur: string;
+  setSelectedLivreur: (liv: string) => void;
+  selectedDateRange: string;
+  setSelectedDateRange: (range: string) => void;
+  filteredSales: Order[];
 }
 
 export const SalesTab: React.FC<SalesTabProps> = ({ 
@@ -21,7 +33,18 @@ export const SalesTab: React.FC<SalesTabProps> = ({
   onEditSale, 
   onUpdateOrder,
   salesPreset = "all",
-  setSalesPreset
+  setSalesPreset,
+  searchQuery,
+  setSearchQuery,
+  selectedCondition,
+  setSelectedCondition,
+  selectedCity,
+  setSelectedCity,
+  selectedLivreur,
+  setSelectedLivreur,
+  selectedDateRange,
+  setSelectedDateRange,
+  filteredSales
 }) => {
   const distinctCities = React.useMemo(() => {
     return Array.from(new Set(sales.map(s => s.City).filter(Boolean))) as string[];
@@ -32,6 +55,14 @@ export const SalesTab: React.FC<SalesTabProps> = ({
     return Array.from(new Set(sales.map(s => s.Livreur).filter(Boolean))) as string[];
   }, [sales]);
   const livreurOptions = distinctLivreurs.length > 0 ? distinctLivreurs : LIVREURS;
+
+  // States for sequential WhatsApp messaging
+  const [selectedOrderIds, setSelectedOrderIds] = useState<string[]>([]);
+  const [isWhatsAppModalOpen, setIsWhatsAppModalOpen] = useState(false);
+
+  const selectedOrders = React.useMemo(() => {
+    return sales.filter(s => selectedOrderIds.includes(s["Order ID"]));
+  }, [sales, selectedOrderIds]);
 
   // Confirm Dialog state
   const [confirmDialog, setConfirmDialog] = useState<{
@@ -46,90 +77,11 @@ export const SalesTab: React.FC<SalesTabProps> = ({
     onConfirm: () => {}
   });
 
-  // Filter States
-  const [searchQuery, setSearchQuery] = useState("");
-  const [selectedCondition, setSelectedCondition] = useState("");
-  const [selectedCity, setSelectedCity] = useState("");
-  const [selectedLivreur, setSelectedLivreur] = useState("");
-  const [selectedDateRange, setSelectedDateRange] = useState("month"); // Default option is "month" as per requirement Section 9!
   const [isFilterOpen, setIsFilterOpen] = useState(true);
 
   // Pagination
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 6;
-
-  // Custom filter check for date ranges
-  const isDateInSelectedRange = (dateStr: string, range: string): boolean => {
-    if (!dateStr) return false;
-    const now = new Date();
-    const cleanDateStr = dateStr.split(" ")[0]; // yyyy-mm-dd
-    const orderDate = new Date(cleanDateStr);
-    
-    // Set time limits to start of days
-    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const yesterdayStart = new Date(todayStart);
-    yesterdayStart.setDate(yesterdayStart.getDate() - 1);
-    
-    const oneWeekAgo = new Date(todayStart);
-    oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
-
-    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-    const startOfYear = new Date(now.getFullYear(), 0, 1);
-
-    switch (range) {
-      case "today":
-        return orderDate >= todayStart;
-      case "yesterday":
-        return orderDate >= yesterdayStart && orderDate < todayStart;
-      case "week":
-        return orderDate >= oneWeekAgo;
-      case "month":
-        return orderDate >= startOfMonth;
-      case "year":
-        return orderDate >= startOfYear;
-      case "all":
-      default:
-        return true;
-    }
-  };
-
-  // Filter Sales
-  const filteredSales = sales.filter(sale => {
-    // Sidebar Preset Filter
-    if (salesPreset === "delivery_requests") {
-      const isLivreurEmpty = !sale.Livreur || sale.Livreur.trim() === "";
-      const isDeliveryEmpty = !sale.delivery || sale.delivery.trim() === "";
-      if (sale.Condition !== "Confirmed" || !isLivreurEmpty || !isDeliveryEmpty) {
-        return false;
-      }
-    } else if (salesPreset === "delivery_status") {
-      const isLivreurFilled = !!sale.Livreur && sale.Livreur.trim() !== "";
-      if (sale.Condition !== "Confirmed" || !isLivreurFilled) {
-        return false;
-      }
-    } else if (salesPreset === "no_status") {
-      const isConditionEmpty = !sale.Condition || sale.Condition.trim() === "";
-      const isLivreurEmpty = !sale.Livreur || sale.Livreur.trim() === "";
-      const isDeliveryEmpty = !sale.delivery || sale.delivery.trim() === "";
-      if (!isConditionEmpty || !isLivreurEmpty || !isDeliveryEmpty) {
-        return false;
-      }
-    }
-
-    // Search Query (id, name, phone)
-    const matchesSearch = !searchQuery ? true : (
-      (sale["Order ID"] || "").toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (sale["Full name"] || "").toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (sale["Phone"] || "").toLowerCase().includes(searchQuery.toLowerCase())
-    );
-
-    const matchesCondition = !selectedCondition ? true : sale.Condition === selectedCondition;
-    const matchesCity = !selectedCity ? true : sale.City === selectedCity;
-    const matchesLivreur = !selectedLivreur ? true : sale.Livreur === selectedLivreur;
-    const matchesDate = isDateInSelectedRange(sale["Order date"], selectedDateRange);
-
-    return matchesSearch && matchesCondition && matchesCity && matchesLivreur && matchesDate;
-  });
 
   // Sorting State
   const [sortField, setSortField] = useState<string>("Order date");
@@ -272,7 +224,7 @@ export const SalesTab: React.FC<SalesTabProps> = ({
             <span>تصفية نشطة من القائمة الجانبية:</span>
             <span className="px-3 py-1 bg-blue-500/15 text-blue-300 rounded-lg border border-blue-500/25">
               {salesPreset === "delivery_requests" && "طلبات التوصيل (Condition: Confirmed، الموزع فارغ، حالة التسليم فارغة)"}
-              {salesPreset === "delivery_status" && "حاله التسليم (Condition: Confirmed، الموزع مملوء)"}
+              {salesPreset === "delivery_status" && "حالة التسليم (Condition: Confirmed، الموزع مملوء، حاله التسليم فارغة)"}
               {salesPreset === "no_status" && "بدون حاله (Condition فارغ، الموزع فارغ، حالة التسليم فارغة)"}
             </span>
           </div>
@@ -312,13 +264,25 @@ export const SalesTab: React.FC<SalesTabProps> = ({
           </div>
         </div>
 
-        <button
-          onClick={onAddSale}
-          className="w-full md:w-auto px-5 py-2.5 bg-blue-600 hover:bg-blue-700 rounded-xl text-white text-xs font-semibold transition-colors flex items-center justify-center gap-2 shadow-lg shadow-blue-900/20 hover:shadow-blue-900/40"
-        >
-          <Plus className="w-4 h-4" />
-          <span>إضافة طلب جديد</span>
-        </button>
+        <div className="flex flex-col sm:flex-row gap-3 w-full md:w-auto">
+          {selectedOrderIds.length > 0 && (
+            <button
+              onClick={() => setIsWhatsAppModalOpen(true)}
+              className="w-full sm:w-auto px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 shadow-lg shadow-emerald-950/20 hover:shadow-emerald-950/40 animate-pulse border border-emerald-500/20"
+            >
+              <MessageCircle className="w-4 h-4 text-emerald-100 shrink-0" />
+              <span>إرسال واتساب تتابعي ({selectedOrderIds.length})</span>
+            </button>
+          )}
+
+          <button
+            onClick={onAddSale}
+            className="w-full sm:w-auto px-5 py-2.5 bg-blue-600 hover:bg-blue-700 rounded-xl text-white text-xs font-semibold transition-colors flex items-center justify-center gap-2 shadow-lg shadow-blue-900/20 hover:shadow-blue-900/40"
+          >
+            <Plus className="w-4 h-4" />
+            <span>إضافة طلب جديد</span>
+          </button>
+        </div>
       </div>
 
       {/* Advanced Collapsible Filter Panel */}
@@ -345,13 +309,14 @@ export const SalesTab: React.FC<SalesTabProps> = ({
           <div>
             <label className="block text-[11px] text-gray-400 mb-1.5 font-medium">الحالة (Condition)</label>
             <select
+              translate="no"
               value={selectedCondition}
               onChange={e => { setSelectedCondition(e.target.value); setCurrentPage(1); }}
-              className="w-full bg-[#0d1426] border border-white/10 text-white rounded-xl px-3 py-2 text-xs"
+              className="notranslate w-full bg-[#0d1426] border border-white/10 text-white rounded-xl px-3 py-2 text-xs"
             >
-              <option value="">الكل</option>
+              <option value="" translate="no" className="notranslate">الكل</option>
               {CONDITIONS.map(c => (
-                <option key={c.value} value={c.value}>{c.label}</option>
+                <option key={c.value} value={c.value} translate="no" className="notranslate">{c.label}</option>
               ))}
             </select>
           </div>
@@ -389,72 +354,88 @@ export const SalesTab: React.FC<SalesTabProps> = ({
             className="col-span-2 md:col-span-1 px-4 py-2 bg-white/5 border border-white/5 hover:bg-white/10 text-gray-300 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 transition-all h-[36px]"
           >
             <RotateCcw className="w-3.5 h-3.5" />
-            <span>إعادة تعيين</span>
+            <span>إعادة تعيين الفلاتر</span>
           </button>
         </div>
       )}
 
-      {/* Main Grid Table Container */}
-      <div className="bg-[#111930]/40 border border-white/5 rounded-2xl shadow-xl overflow-hidden glass-effect">
+      {/* Sales Table Section */}
+      <div className="bg-[#111930]/40 border border-white/5 rounded-2xl overflow-hidden glass-effect">
         <div className="overflow-x-auto">
           <table className="w-full text-right border-collapse">
             <thead className="bg-[#0d1426] text-gray-400 text-[10px] font-bold uppercase tracking-wider border-b border-white/5 select-none font-mono">
               <tr>
-                <th onClick={() => handleSort("Order ID")} className="px-5 py-4 cursor-pointer hover:bg-white/[0.05] transition-colors">
+                <th className="px-4 py-4 w-12 text-center select-none">
+                  <input
+                    type="checkbox"
+                    checked={currentSales.length > 0 && currentSales.every(s => selectedOrderIds.includes(s["Order ID"]))}
+                    onChange={(e) => {
+                      if (e.target.checked) {
+                        const ids = currentSales.map(s => s["Order ID"]);
+                        setSelectedOrderIds(prev => Array.from(new Set([...prev, ...ids])));
+                      } else {
+                        const ids = currentSales.map(s => s["Order ID"]);
+                        setSelectedOrderIds(prev => prev.filter(id => !ids.includes(id)));
+                      }
+                    }}
+                    className="rounded border-white/10 bg-[#0d1426] text-emerald-500 focus:ring-emerald-500 w-3.5 h-3.5"
+                  />
+                </th>
+                <th onClick={() => handleSort("Order ID")} className="px-4 py-4 cursor-pointer hover:bg-white/[0.05] transition-colors whitespace-nowrap min-w-[130px] w-[130px]">
                   <div className="flex items-center gap-1 justify-start">
                     <span>الرقم</span>
                     {renderSortIcon("Order ID")}
                   </div>
                 </th>
-                <th onClick={() => handleSort("Order date")} className="px-5 py-4 cursor-pointer hover:bg-white/[0.05] transition-colors">
+                <th onClick={() => handleSort("Order date")} className="px-4 py-4 cursor-pointer hover:bg-white/[0.05] transition-colors whitespace-nowrap min-w-[160px] w-[160px]">
                   <div className="flex items-center gap-1 justify-start">
                     <span>التاريخ</span>
                     {renderSortIcon("Order date")}
                   </div>
                 </th>
-                <th onClick={() => handleSort("Full name")} className="px-5 py-4 cursor-pointer hover:bg-white/[0.05] transition-colors">
+                <th onClick={() => handleSort("Full name")} className="px-4 py-4 cursor-pointer hover:bg-white/[0.05] transition-colors">
                   <div className="flex items-center gap-1 justify-start">
                     <span>العميل</span>
                     {renderSortIcon("Full name")}
                   </div>
                 </th>
-                <th onClick={() => handleSort("Phone")} className="px-5 py-4 cursor-pointer hover:bg-white/[0.05] transition-colors">
+                <th onClick={() => handleSort("Phone")} className="px-4 py-4 cursor-pointer hover:bg-white/[0.05] transition-colors">
                   <div className="flex items-center gap-1 justify-start">
                     <span>الهاتف</span>
                     {renderSortIcon("Phone")}
                   </div>
                 </th>
-                <th onClick={() => handleSort("City")} className="px-5 py-4 cursor-pointer hover:bg-white/[0.05] transition-colors">
+                <th onClick={() => handleSort("City")} className="px-4 py-4 cursor-pointer hover:bg-white/[0.05] transition-colors whitespace-nowrap min-w-[100px]">
                   <div className="flex items-center gap-1 justify-start">
                     <span>المدينة</span>
                     {renderSortIcon("City")}
                   </div>
                 </th>
-                <th onClick={() => handleSort("Product name")} className="px-5 py-4 cursor-pointer hover:bg-white/[0.05] transition-colors">
+                <th onClick={() => handleSort("Product name")} className="px-4 py-4 cursor-pointer hover:bg-white/[0.05] transition-colors">
                   <div className="flex items-center gap-1 justify-start">
                     <span>المنتج</span>
                     {renderSortIcon("Product name")}
                   </div>
                 </th>
-                <th onClick={() => handleSort("Variant price")} className="px-5 py-4 cursor-pointer hover:bg-white/[0.05] transition-colors font-sans">
+                <th onClick={() => handleSort("Variant price")} className="px-4 py-4 cursor-pointer hover:bg-white/[0.05] transition-colors font-sans">
                   <div className="flex items-center gap-1 justify-start">
                     <span>السعر</span>
                     {renderSortIcon("Variant price")}
                   </div>
                 </th>
-                <th onClick={() => handleSort("Condition")} className="px-5 py-4 cursor-pointer hover:bg-white/[0.05] transition-colors">
+                <th onClick={() => handleSort("Condition")} className="px-2 py-4 cursor-pointer hover:bg-white/[0.05] transition-colors max-w-[80px]">
                   <div className="flex items-center gap-1 justify-start">
                     <span>الإجراء</span>
                     {renderSortIcon("Condition")}
                   </div>
                 </th>
-                <th onClick={() => handleSort("Livreur")} className="px-5 py-4 cursor-pointer hover:bg-white/[0.05] transition-colors">
+                <th onClick={() => handleSort("Livreur")} className="px-2 py-4 cursor-pointer hover:bg-white/[0.05] transition-colors max-w-[95px]">
                   <div className="flex items-center gap-1 justify-start">
                     <span>الموزع</span>
                     {renderSortIcon("Livreur")}
                   </div>
                 </th>
-                <th onClick={() => handleSort("delivery")} className="px-5 py-4 cursor-pointer hover:bg-white/[0.05] transition-colors">
+                <th onClick={() => handleSort("delivery")} className="px-2 py-4 cursor-pointer hover:bg-white/[0.05] transition-colors max-w-[80px]">
                   <div className="flex items-center gap-1 justify-start">
                     <span>الحالة</span>
                     {renderSortIcon("delivery")}
@@ -468,7 +449,7 @@ export const SalesTab: React.FC<SalesTabProps> = ({
             <tbody className="divide-y divide-white/5 text-xs font-sans text-gray-200">
               {currentSales.length === 0 ? (
                 <tr>
-                  <td colSpan={11} className="px-5 py-16 text-center text-gray-500 font-medium">
+                  <td colSpan={12} className="px-5 py-16 text-center text-gray-500 font-medium">
                     لا تتوفر طلبيات مطابقة لمعايير البحث الحالية
                   </td>
                 </tr>
@@ -477,60 +458,89 @@ export const SalesTab: React.FC<SalesTabProps> = ({
                   const rowNum = sale._rowNum || (idx + 2);
                   return (
                     <tr key={sale["Order ID"] + idx} className="hover:bg-white/[0.02] transition-colors group">
+                      {/* Selection Checkbox */}
+                      <td className="px-4 py-3.5 text-center select-none w-12">
+                        <input
+                          type="checkbox"
+                          checked={selectedOrderIds.includes(sale["Order ID"])}
+                          onChange={() => {
+                            setSelectedOrderIds(prev => {
+                              if (prev.includes(sale["Order ID"])) {
+                                return prev.filter(id => id !== sale["Order ID"]);
+                              } else {
+                                return [...prev, sale["Order ID"]];
+                              }
+                            });
+                          }}
+                          className="rounded border-white/10 bg-[#0d1426] text-emerald-500 focus:ring-emerald-500 w-3.5 h-3.5 cursor-pointer"
+                        />
+                      </td>
+
                       {/* Order ID */}
-                      <td className="px-5 py-3.5 font-mono text-blue-400 font-bold tracking-wide cell-order-id select-all">
+                      <td className="px-4 py-3.5 font-mono text-blue-400 font-bold tracking-wide cell-order-id select-all whitespace-nowrap min-w-[130px] w-[130px]">
                         {sale["Order ID"]}
                       </td>
 
                       {/* Order date */}
-                      <td className="px-5 py-3.5 text-gray-400 font-mono">
+                      <td className="px-4 py-3.5 text-gray-400 font-mono whitespace-nowrap min-w-[160px] w-[160px]">
                         {formatDateDisplay(sale["Order date"])}
                       </td>
 
                       {/* Full Name */}
-                      <td className="px-5 py-3.5 font-bold text-white max-w-[120px] truncate cell-fullname">
+                      <td className="px-4 py-3.5 font-bold text-white max-w-[120px] truncate cell-fullname">
                         {sale["Full name"]}
                       </td>
 
                       {/* Phone */}
-                      <td className="px-5 py-3.5 font-mono tracking-tight text-white/90">
+                      <td className="px-4 py-3.5 font-mono tracking-tight text-white/90 whitespace-nowrap">
                         {sale.Phone || "-"}
                       </td>
 
-                      {/* City + Region */}
-                      <td className="px-5 py-3.5">
-                        <div className="font-semibold text-gray-100">{sale.City}</div>
-                        <div className="text-[10px] text-gray-500 mt-0.5">{sale.Region || sale.City}</div>
+                      {/* City */}
+                      <td className="px-4 py-3.5 whitespace-nowrap min-w-[100px]">
+                        <div className="font-semibold text-gray-100">
+                          {sale.City ? sale.City.split(/[-–—,/()\\]/)[0].trim() : "-"}
+                        </div>
                       </td>
 
                       {/* Product CODE */}
-                      <td className="px-5 py-3.5 max-w-[150px] truncate">
+                      <td className="px-4 py-3.5 max-w-[150px] truncate">
                         <span className="px-2 py-0.5 bg-white/5 border border-white/5 rounded text-gray-300 font-mono text-[10px] uppercase font-semibold">
                           {sale["Product name"]}
                         </span>
                       </td>
 
                       {/* Variant Price */}
-                      <td className="px-5 py-3.5 font-mono font-bold text-gray-200">
+                      <td className="px-4 py-3.5 font-mono font-bold text-gray-200">
                         {formatCurrency(sale["Variant price"] || 0)}
                       </td>
 
                       {/* Condition Selection Dropdown */}
-                      <td className="px-3 py-3.5">
+                      <td className="px-2 py-3.5 max-w-[80px]">
                         <select
+                          translate="no"
                           value={sale.Condition || "Confirmed"}
                           onChange={e => handleInlineChange(rowNum, "Condition", e.target.value, sale)}
-                          className={`bg-[#0d1426] border rounded-lg px-2 py-1 text-[11px] font-sans focus:border-blue-500/50 ${
-                            sale.Condition === "Confirmed"
-                              ? "text-blue-400 border-blue-500/30"
-                              : "text-amber-400 border-amber-500/30"
+                          className={`notranslate border rounded-lg px-1.5 py-0.5 text-[10px] font-sans focus:border-blue-500/50 max-w-[75px] w-full ${
+                            ["Ne repond pas", "Anule", "Pas intéresse"].includes(sale.Condition || "Confirmed")
+                              ? "bg-red-600 text-white border-red-500 font-semibold"
+                              : (sale.Condition || "Confirmed") === "Confirmed"
+                              ? "bg-[#0d1426] text-blue-400 border-blue-500/30"
+                              : "bg-[#0d1426] text-amber-400 border-amber-500/30"
                           }`}
                         >
                           {CONDITIONS.map(cond => (
                             <option 
                               key={cond.value} 
                               value={cond.value} 
-                              className={`bg-[#0f172a] ${cond.value === "Confirmed" ? "text-blue-400" : "text-amber-400"}`}
+                              translate="no"
+                              className={`notranslate bg-[#0f172a] ${
+                                ["Ne repond pas", "Anule", "Pas intéresse"].includes(cond.value)
+                                  ? "text-red-500 font-semibold"
+                                  : cond.value === "Confirmed"
+                                  ? "text-blue-400"
+                                  : "text-amber-400"
+                              }`}
                             >
                               {cond.label}
                             </option>
@@ -539,11 +549,11 @@ export const SalesTab: React.FC<SalesTabProps> = ({
                       </td>
 
                       {/* Livreur Selection Dropdown */}
-                      <td className="px-3 py-3.5">
+                      <td className="px-2 py-3.5 max-w-[95px]">
                         <select
                           value={sale.Livreur || ""}
                           onChange={e => handleInlineChange(rowNum, "Livreur", e.target.value, sale)}
-                          className={`bg-[#0d1426] border rounded-lg px-2 py-1 text-[11px] font-sans focus:border-blue-500/50 ${
+                          className={`bg-[#0d1426] border rounded-lg px-1.5 py-0.5 text-[10px] font-sans focus:border-blue-500/50 max-w-[90px] w-full ${
                             sale.Livreur
                               ? "text-blue-400 border-blue-500/30"
                               : "text-amber-400 border-amber-500/30"
@@ -563,11 +573,11 @@ export const SalesTab: React.FC<SalesTabProps> = ({
                       </td>
 
                       {/* Delivery Status Selection (Section 4.1 Sync Trigger) */}
-                      <td className="px-3 py-3.5">
+                      <td className="px-2 py-3.5 max-w-[80px]">
                         <select
                           value={sale.delivery || ""}
                           onChange={e => handleInlineChange(rowNum, "delivery", e.target.value, sale)}
-                          className={`border rounded-lg px-2 py-1 text-[11px] font-medium font-sans focus:outline-none bg-[#0d1426] ${
+                          className={`border rounded-lg px-1.5 py-0.5 text-[10px] font-medium font-sans focus:outline-none bg-[#0d1426] max-w-[75px] w-full ${
                             sale.delivery === "Delivered"
                               ? "text-blue-400 border-blue-500/30"
                               : "text-amber-400 border-amber-500/30"
@@ -622,18 +632,7 @@ export const SalesTab: React.FC<SalesTabProps> = ({
                             </a>
                           )}
 
-                          {/* Target Landing Page Target */}
-                          {sale["Product URL"] && (
-                            <a
-                              href={sale["Product URL"]}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              title="رابط صفحة المبيعات بالمتجر"
-                              className="p-1.5 bg-white/5 hover:bg-amber-600/10 hover:text-amber-400 rounded-lg text-gray-400 transition-all border border-transparent hover:border-amber-500/15"
-                            >
-                              <ExternalLink className="w-3.5 h-3.5" />
-                            </a>
-                          )}
+
                         </div>
                       </td>
                     </tr>
@@ -696,6 +695,14 @@ export const SalesTab: React.FC<SalesTabProps> = ({
         onConfirm={confirmDialog.onConfirm}
         onCancel={() => setConfirmDialog(p => ({ ...p, isOpen: false }))}
         type="warning"
+      />
+
+      {/* WhatsApp Sequential Sending Assistant Modal */}
+      <WhatsAppSequentialSendModal
+        isOpen={isWhatsAppModalOpen}
+        onClose={() => setIsWhatsAppModalOpen(false)}
+        selectedOrders={selectedOrders}
+        onUpdateOrder={onUpdateOrder}
       />
     </div>
   );

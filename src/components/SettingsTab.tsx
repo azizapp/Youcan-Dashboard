@@ -151,9 +151,8 @@ export const SettingsTab: React.FC<SettingsProps> = ({ onSync, isLoading }) => {
       });
       const data = await res.json();
       if (data.success) {
-        const counts = data.pulledIndicesCount || { sales: 0, purchases: 0, payments: 0, expenses: 0 };
         showStatus(
-          `تم استيراد البيانات وتحديث لوحة التحكم بنجاح! (الطلبيات: ${counts.sales} | المشتريات: ${counts.purchases} | دفع الموردين: ${counts.payments} | المصاريف: ${counts.expenses})`,
+          data.message || "تم جدولة وبدء عملية استيراد البيانات من Google Sheets في الخلفية بنجاح!",
           "success"
         );
         onSync(); // Update App DB state immediately
@@ -194,7 +193,10 @@ export const SettingsTab: React.FC<SettingsProps> = ({ onSync, isLoading }) => {
       });
       const data = await res.json();
       if (data.success) {
-        showStatus("تم ترحيل وتصدير البيانات إلى Google Sheets بنجاح تام!", "success");
+        showStatus(
+          data.message || "تم جدولة ترحيل وتصدير البيانات إلى Google Sheets لتتم في الخلفية بنجاح تام!",
+          "success"
+        );
         onSync();
       } else {
         showStatus(data.error || "فشل ترحيل البيانات. يرجى المتابعة بتسجيل الدخول بـ Google أو التحقق من صلاحيات الملف.", "error");

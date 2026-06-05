@@ -16,6 +16,7 @@ export const PurchasesTab: React.FC<PurchasesTabProps> = ({ purchases, sales, pa
 
   // Filter & Searches
   const [searchQuery, setSearchQuery] = useState("");
+  const [selectedDeliveryStatus, setSelectedDeliveryStatus] = useState<string>("Delivered");
 
   // Sorting States
   const [sortField, setSortField] = useState<string>("date");
@@ -98,10 +99,14 @@ export const PurchasesTab: React.FC<PurchasesTabProps> = ({ purchases, sales, pa
     purchases.forEach(p => {
       const groupKey = `${p.Produit}||${p.Fournisseur}`;
       if (!map[groupKey]) {
-        // Calculate units sold match (Delivered only) where Order Product name (= code) matches Achat Code or Produit (case-insensitive)
+        // Calculate units sold match where Order Product name (= code) matches Achat Code or Produit (case-insensitive)
         let totalSoldCodeCount = 0;
         sales.forEach(sale => {
-          if (sale.delivery === "Delivered") {
+          const matchesDelivery = selectedDeliveryStatus === "all" 
+            ? true 
+            : (selectedDeliveryStatus === "" ? (!sale.delivery || sale.delivery.trim() === "") : sale.delivery === selectedDeliveryStatus);
+
+          if (matchesDelivery) {
             const productRef = (sale["Product name"] || "").toLowerCase();
             const achatCode = (p.Code || "").toLowerCase();
             const achatProd = (p.Produit || "").toLowerCase();
@@ -124,7 +129,7 @@ export const PurchasesTab: React.FC<PurchasesTabProps> = ({ purchases, sales, pa
     });
 
     return Object.values(map);
-  }, [purchases, sales]);
+  }, [purchases, sales, selectedDeliveryStatus]);
 
   // Filter lists based on search query
   const filteredAggregatedPurchases = aggregatedPurchases.filter(p => 
@@ -230,7 +235,26 @@ export const PurchasesTab: React.FC<PurchasesTabProps> = ({ purchases, sales, pa
         </div>
 
         {/* Inputs */}
-        <div className="flex gap-3 items-center w-full sm:w-auto">
+        <div className="flex flex-wrap gap-3 items-center w-full sm:w-auto font-sans">
+          {activeSubTab === "purchases" && (
+            <div className="flex items-center gap-2">
+              <span className="text-gray-400 text-xs shrink-0 font-medium">حالة التسليم (العمود N):</span>
+              <select
+                value={selectedDeliveryStatus}
+                onChange={e => setSelectedDeliveryStatus(e.target.value)}
+                className="bg-[#0d1426] border border-white/10 text-xs rounded-xl px-3 py-2 text-white font-sans focus:outline-none focus:border-blue-500/50 cursor-pointer"
+              >
+                <option value="all">الكل (جميع الحالات)</option>
+                <option value="Delivered">Delivered</option>
+                <option value="Retour">Retour</option>
+                <option value="annuler">Annulée</option>
+                <option value="Client Injoignable">Client Injoignable</option>
+                <option value="Annulé Au Téléphone">Annulé Au Téléphone</option>
+                <option value="Annulé Sur Place">Annulé Sur Place</option>
+                <option value="">بدون حالة (معلق)</option>
+              </select>
+            </div>
+          )}
           <input
             type="text"
             placeholder={activeSubTab === "purchases" ? "بحث عن منتج، رمز، مورد..." : "بحث باسم المورد..."}
@@ -299,7 +323,7 @@ export const PurchasesTab: React.FC<PurchasesTabProps> = ({ purchases, sales, pa
                   </th>
                   <th onClick={() => handleSort("totalQtySold")} className="px-6 py-4 text-center cursor-pointer hover:bg-white/[0.05] transition-colors">
                     <div className="flex items-center gap-1 justify-center">
-                      <span>المباع</span>
+                      <span>المباع ({selectedDeliveryStatus === "all" ? "الكل" : selectedDeliveryStatus === "" ? "بدون حالة" : selectedDeliveryStatus})</span>
                       {renderSortIcon("totalQtySold")}
                     </div>
                   </th>
